@@ -171,7 +171,7 @@ async def _poll_once(
                 updates.append({
                     "id": lamp.id,
                     "status": ws_status,
-                    "state": round(lamp.failure_probability, 4),
+                    "state": round(1.0 - lamp.failure_probability, 4),
                 })
 
         session.commit()

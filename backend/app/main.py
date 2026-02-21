@@ -60,6 +60,66 @@ app.add_middleware(
 
 # ── Demo seed ────────────────────────────────────────────
 
+def _generate_lamp_positions() -> list[tuple[str, float, float, str]]:
+    """Генерация позиций ламп — зеркалит логику generateLamps() на фронте."""
+    ORIGIN_LAT = 55.752317
+    ORIGIN_LNG = 48.744578
+    import math
+
+    lamps: list[tuple[str, float, float, str]] = []
+
+    # 1. Universitetskaya St (15 ламп)
+    for i in range(15):
+        lamps.append((
+            f"Universitetskaya St #{i+1}",
+            ORIGIN_LAT - i * 0.0004,
+            ORIGIN_LNG - i * 0.0002,
+            f"Universitetskaya St #{i+1}",
+        ))
+
+    # 2. Sportivnaya St (15 ламп)
+    for i in range(15):
+        lamps.append((
+            f"Sportivnaya St #{i+1}",
+            ORIGIN_LAT - i * 0.0001,
+            ORIGIN_LNG + i * 0.0005,
+            f"Sportivnaya St #{i+1}",
+        ))
+
+    # 3. Central Park Ring (12 ламп)
+    park_lat, park_lng, radius = 55.7510, 48.7480, 0.0015
+    for i in range(12):
+        angle = (i / 12) * 2 * math.pi
+        lamps.append((
+            f"Central Park #{i+1}",
+            park_lat + radius * math.cos(angle) * 0.6,
+            park_lng + radius * math.sin(angle),
+            f"Central Park #{i+1}",
+        ))
+
+    # 4. Technopark Loop (10 ламп)
+    techno_lat, techno_lng = 55.751817, 48.742578
+    for i in range(10):
+        lamps.append((
+            f"Technopark Loop #{i+1}",
+            techno_lat + i * 0.0003,
+            techno_lng - i * 0.0001,
+            f"Technopark Loop #{i+1}",
+        ))
+
+    # 5. Residential District (10 ламп)
+    res_lat, res_lng = 55.754817, 48.746578
+    for i in range(10):
+        lamps.append((
+            f"Residential District #{i+1}",
+            res_lat - i * 0.0002,
+            res_lng + i * 0.0004,
+            f"Residential District #{i+1}",
+        ))
+
+    return lamps
+
+
 def _seed_demo_data() -> None:
     """Создать демо-данные, если БД пуста."""
     with Session(engine) as session:
@@ -67,21 +127,15 @@ def _seed_demo_data() -> None:
         if existing:
             return
 
-        demo_lights = [
-            ("СТ-001", 55.752317, 48.744578, "Origin (University)", 1),
-            ("СТ-002", 55.753817, 48.746578, "Sport Complex Area", 2),
-            ("СТ-003", 55.751817, 48.742578, "Technopark Area", 3),
-            ("СТ-004", 55.754817, 48.746578, "Residential Area East", 4),
-            ("СТ-005", 55.753317, 48.745578, "Campus North", 5),
-        ]
+        positions = _generate_lamp_positions()
 
-        for name, lat, lon, addr, slave_id in demo_lights:
+        for idx, (name, lat, lon, addr) in enumerate(positions, start=1):
             sl = Streetlight(
                 name=name,
                 latitude=lat,
                 longitude=lon,
                 address=addr,
-                modbus_slave_id=slave_id,
+                modbus_slave_id=idx,
             )
             session.add(sl)
             session.flush()
@@ -90,7 +144,7 @@ def _seed_demo_data() -> None:
             session.add(lamp)
 
         session.commit()
-        logger.info("Seeded %d demo streetlights", len(demo_lights))
+        logger.info("Seeded %d demo streetlights", len(positions))
 
 
 # ── REST API ─────────────────────────────────────────────
@@ -202,7 +256,7 @@ async def ws_endpoint(ws: WebSocket):
             msg = {
                 "id": lamp.id,
                 "status": _lamp_ws_status(lamp),
-                "state": round(lamp.failure_probability, 4),
+                "state": round(1.0 - lamp.failure_probability, 4),
                 "lat": sl.latitude,
                 "lng": sl.longitude,
                 "address": sl.address,
@@ -222,6 +276,30 @@ async def ws_endpoint(ws: WebSocket):
                 continue
 
             new_status = msg.get("status")
+            new_state = msg.get("state")
+
+            # Обработка сообщения от дрона: {id, state} (без status)
+            if new_state is not None and new_status is None:
+                with Session(engine) as session:
+                    lamp = session.get(Lamp, lamp_id)
+                    if not lamp:
+                        continue
+                    sl = session.get(Streetlight, lamp.streetlight_id)
+                    controller = app.state.controller
+
+                    # state=1 означает "починено" → failure_probability=0, статус OK
+                    lamp.failure_probability = round(1.0 - float(new_state), 4)
+                    if float(new_state) >= 0.66:
+                        lamp.status = LampStatus.OK
+                        await controller.set_status(sl.modbus_slave_id, LampStatusCode.OK)
+                    session.commit()
+
+                    await ws_manager.broadcast(
+                        {"id": lamp.id, "state": round(float(new_state), 4)},
+                        exclude=ws,
+                    )
+                continue
+
             if new_status not in ("on", "off", "broken"):
                 continue
 
@@ -255,7 +333,7 @@ async def ws_endpoint(ws: WebSocket):
                     {
                         "id": lamp.id,
                         "status": new_status,
-                        "state": round(lamp.failure_probability, 4),
+                        "state": round(1.0 - lamp.failure_probability, 4),
                     },
                     exclude=ws,
                 )
