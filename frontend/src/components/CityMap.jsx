@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css'; // CRITICAL: Required for Leaflet styles
+import L from 'leaflet';
 
 const ORIGIN_LAT = 55.752317;
 const ORIGIN_LNG = 48.744578;
@@ -8,13 +9,122 @@ const ORIGIN_LNG = 48.744578;
 const DRONEPORT_LAT = 55.7528;
 const DRONEPORT_LNG = 48.7452;
 
-const initialLamps = [
-  { id: 1, lat: 55.752317, lng: 48.744578, status: 'off', state:0.90 , address: 'Origin (University)' },
-  { id: 2, lat: 55.753817, lng: 48.746578, status: 'on', state:0.20 , address: 'Sport Complex Area' },
-  { id: 3, lat: 55.751817, lng: 48.742578, status: 'off', state:0.20, address: 'Technopark Area' },
-  { id: 4, lat: 55.754817, lng: 48.746578, status: 'off', state:0.90, address: 'Residential Area East' },
-  { id: 5, lat: 55.753317, lng: 48.745578, status: 'on', state:0.20, address: 'Campus North' },
-];
+// --- Helper Functions for Icons ---
+
+const createLampIcon = (status, state) => {
+  const borderColor = getBorderColor(status);
+  const coreColor = getColor(state);
+  return L.divIcon({
+    className: 'custom-lamp-icon',
+    html: `
+      <div class="lamp-marker">
+        <div class="lamp-halo" style="border-color: ${borderColor}; color: ${borderColor}"></div>
+        <div class="lamp-core" style="background-color: ${coreColor}; color: ${coreColor}"></div>
+      </div>
+    `,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    popupAnchor: [0, -15]
+  });
+};
+
+const createDroneIcon = () => {
+  return L.divIcon({
+    className: 'custom-drone-icon',
+    html: `
+      <div class="drone-marker">
+        <div class="drone-arm arm-1"></div>
+        <div class="drone-arm arm-2"></div>
+        <div class="drone-body"></div>
+        <div class="drone-prop tl"></div>
+        <div class="drone-prop tr"></div>
+        <div class="drone-prop bl"></div>
+        <div class="drone-prop br"></div>
+      </div>
+    `,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    popupAnchor: [0, -15]
+  });
+};
+
+const createDroneportIcon = () => {
+  return L.divIcon({
+    className: 'custom-droneport-icon',
+    html: `
+      <div class="droneport-marker">
+        <div class="droneport-base">
+          <div class="droneport-pad"></div>
+          <div class="droneport-beacon"></div>
+        </div>
+      </div>
+    `,
+    iconSize: [40, 40],
+    iconAnchor: [20, 20],
+    popupAnchor: [0, -20]
+  });
+};
+
+const generateLamps = () => {
+  const lamps = [];
+  let id = 1;
+
+  // Function to create a lamp
+  const addLamp = (lat, lng, address) => {
+    lamps.push({
+      id: id++,
+      lat,
+      lng,
+      status: Math.random() > 0.8 ? 'off' : 'on', // Random initial status
+      state: Math.random() * 0.5 + 0.5, // Random initial state 0.5-1.0
+      address
+    });
+  };
+
+  // 1. Universitetskaya St (approximate path)
+  // Starting near Origin, going South-West
+  for (let i = 0; i < 15; i++) {
+    addLamp(ORIGIN_LAT - i * 0.0004, ORIGIN_LNG - i * 0.0002, `Universitetskaya St #${i+1}`);
+  }
+
+  // 2. Sportivnaya St (approximate path)
+  // Perpendicular, going South-East
+  for (let i = 0; i < 15; i++) {
+    addLamp(ORIGIN_LAT - i * 0.0001, ORIGIN_LNG + i * 0.0005, `Sportivnaya St #${i+1}`);
+  }
+
+  // 3. Central Park Ring (approximate circle)
+  const parkLat = 55.7510;
+  const parkLng = 48.7480;
+  const radius = 0.0015;
+  for (let i = 0; i < 12; i++) {
+    const angle = (i / 12) * 2 * Math.PI;
+    addLamp(
+      parkLat + radius * Math.cos(angle) * 0.6, // Scale lat to look circular on map
+      parkLng + radius * Math.sin(angle),
+      `Central Park #${i+1}`
+    );
+  }
+
+   // 4. Technopark Loop
+   const technoLat = 55.751817;
+   const technoLng = 48.742578;
+   for (let i = 0; i < 10; i++) {
+      addLamp(technoLat + i * 0.0003, technoLng - i * 0.0001, `Technopark Loop #${i+1}`);
+   }
+
+   // 5. Residential District
+   const resLat = 55.754817;
+   const resLng = 48.746578;
+   for(let i=0; i< 10; i++) {
+       addLamp(resLat - i * 0.0002, resLng + i * 0.0004, `Residential District #${i+1}`);
+   }
+
+
+  return lamps;
+};
+
+const initialLamps = generateLamps();
 
 const getBorderColor = (status) => {
   switch (status) {
@@ -54,33 +164,6 @@ const MapUpdater = () => {
   return null;
 };
 
-// Legend Component
-const MapLegend = () => (
-  <div style={{
-    position: 'absolute',
-    bottom: '30px',
-    left: '20px',
-    zIndex: 1000,
-    background: 'white',
-    padding: '10px',
-    borderRadius: '8px',
-    boxShadow: '0 0 10px rgba(0,0,0,0.2)',
-    fontSize: '12px',
-    fontFamily: 'sans-serif'
-  }}>
-    <h4 style={{ margin: '0 0 5px', fontSize: '14px' }}>Lamp Status</h4>
-    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '4px' }}>
-      <span style={{ width: '12px', height: '12px', background: '#2ecc71', borderRadius: '50', display: 'inline-block', marginRight: '8px' }}></span> On
-    </div>
-    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '4px' }}>
-      <span style={{ width: '12px', height: '12px', background: '#95a5a6', borderRadius: '50', display: 'inline-block', marginRight: '8px' }}></span> Off
-    </div>
-    <div style={{ display: 'flex', alignItems: 'center' }}>
-      <span style={{ width: '12px', height: '12px', background: '#e74c3c', borderRadius: '50', display: 'inline-block', marginRight: '8px' }}></span> Broken
-    </div>
-  </div>
-);
-
 const CityMap = () => {
   const [lamps, setLamps] = useState(initialLamps);
   const [wsStatus, setWsStatus] = useState('Connecting...');
@@ -96,6 +179,7 @@ const CityMap = () => {
   const droneStatusRef = useRef('idle');
   const targetIndexRef = useRef(0);
   const waitUntilRef = useRef(null);
+  const currentSpeedRef = useRef(0); // For smooth acceleration
 
   const connectWebSocket = () => {
     // Clear existing timeout if any
@@ -112,7 +196,7 @@ const CityMap = () => {
       ws.current.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          console.log('Received update:', data);
+          // console.log('Received update:', data);
           
           if (data.id && data.status) {
             setLamps(prevLamps => 
@@ -191,9 +275,11 @@ const CityMap = () => {
 
   useEffect(() => {
     if (droneStatus !== 'toLamp' && droneStatus !== 'return') return;
-    if (dronePath.length === 0) return;
+    if (dronePath.length === 0 && droneStatus === 'toLamp') return;
 
-    const speed = 0.00001;
+    const maxSpeed = 0.00003;
+    const acceleration = 0.0000005;
+    const decelerationDist = 0.0005;
 
     const step = () => {
       const pos = dronePosRef.current;
@@ -223,7 +309,11 @@ const CityMap = () => {
       const dy = target.lat - pos.lat;
       const dist = Math.sqrt(dx * dx + dy * dy);
 
+      // Animation Logic
       if (dist < 0.00005) {
+        // Reached target
+        currentSpeedRef.current = 0; // Reset speed
+
         if (droneStatusRef.current === 'toLamp') {
           const now = performance.now();
 
@@ -271,7 +361,20 @@ const CityMap = () => {
           setDronePos({ lat: DRONEPORT_LAT, lng: DRONEPORT_LNG });
         }
       } else {
-        const ratio = speed / dist;
+        // Move towards target
+        
+        // Acceleration / Deceleration
+        if (dist < decelerationDist) {
+          // Decelerate
+          currentSpeedRef.current = Math.max(0.000005, currentSpeedRef.current - acceleration);
+        } else {
+          // Accelerate
+          currentSpeedRef.current = Math.min(maxSpeed, currentSpeedRef.current + acceleration);
+        }
+
+        const moveDist = currentSpeedRef.current;
+        const ratio = moveDist / dist;
+
         setDronePos(prev => ({
           lat: prev.lat + dy * ratio,
           lng: prev.lng + dx * ratio
@@ -312,6 +415,11 @@ const CityMap = () => {
     const brokenLamps = lamps.filter(l => l.state <= 0.33);
     if (brokenLamps.length === 0) return;
 
+    // Sort lamps by distance to optimize path (simple greedy)
+    // Actually, let's just keep it simple for now or random
+    // But sorting by distance from droneport then next closest would be better
+    // For now, let's just take them as is
+    
     const pathIds = brokenLamps.map(l => l.id);
     setDronePath(pathIds);
     setCurrentTargetIndex(0);
@@ -350,39 +458,6 @@ const CityMap = () => {
         }}></span>
         {wsStatus}
       </div>
-      <div style={{ 
-        position: 'absolute',
-        top: '50px',
-        right: '10px',
-        zIndex: 1000,
-        background: 'white',
-        padding: '10px 12px',
-        borderRadius: '8px',
-        boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
-        fontSize: '13px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '6px'
-      }}>
-        <div>Дрон: {droneStatus === 'idle' ? 'ожидает' : droneStatus === 'toLamp' ? 'обслуживает лампы' : 'возвращается'}</div>
-        <button 
-          onClick={startDroneMission}
-          disabled={droneStatus !== 'idle' || !lamps.some(l => l.state <= 0.33)}
-          style={{
-            padding: '6px 10px',
-            borderRadius: '6px',
-            border: 'none',
-            background: droneStatus === 'idle' && lamps.some(l => l.state <= 0.33) ? '#3498db' : '#bdc3c7',
-            color: 'white',
-            cursor: droneStatus === 'idle' && lamps.some(l => l.status === 'broken') ? 'pointer' : 'default',
-            fontSize: '13px'
-          }}
-        >
-          Запустить дрона
-        </button>
-      </div>
-      
-      <MapLegend />
 
       <MapContainer 
         center={[ORIGIN_LAT, ORIGIN_LNG]} 
@@ -397,15 +472,11 @@ const CityMap = () => {
           subdomains="abcd"
           maxZoom={19}
         />
-        <CircleMarker 
-          center={[DRONEPORT_LAT, DRONEPORT_LNG]}
-          pathOptions={{ 
-            color: '#34495e', 
-            fillColor: '#34495e', 
-            fillOpacity: 1,
-            weight: 2
-          }}
-          radius={10}
+        
+        {/* Droneport Marker */}
+        <Marker 
+          position={[DRONEPORT_LAT, DRONEPORT_LNG]}
+          icon={createDroneportIcon()}
         >
           <Popup>
             <div style={{ minWidth: '150px' }}>
@@ -413,16 +484,12 @@ const CityMap = () => {
               <p style={{ margin: '2px 0', fontSize: '13px', color: '#555' }}>База обслуживания дронов</p>
             </div>
           </Popup>
-        </CircleMarker>
-        <CircleMarker 
-          center={[dronePos.lat, dronePos.lng]}
-          pathOptions={{ 
-            color: '#2980b9', 
-            fillColor: '#2980b9', 
-            fillOpacity: 1,
-            weight: 2
-          }}
-          radius={12}
+        </Marker>
+
+        {/* Drone Marker */}
+        <Marker 
+          position={[dronePos.lat, dronePos.lng]}
+          icon={createDroneIcon()}
         >
           <Popup>
             <div style={{ minWidth: '150px' }}>
@@ -430,26 +497,16 @@ const CityMap = () => {
               <p style={{ margin: '2px 0', fontSize: '13px', color: '#555' }}>Патрулирует сломанные лампы и заменяет их</p>
             </div>
           </Popup>
-        </CircleMarker>
+        </Marker>
+
+        {/* Lamp Markers */}
         {lamps.map(lamp => (
-          <CircleMarker 
+          <Marker 
             key={lamp.id} 
-            center={[lamp.lat, lamp.lng]}
-            pathOptions={{ 
-              color: getBorderColor(lamp.status), 
-              fillColor: getColor(lamp.state), 
-              fillOpacity: 1,
-              weight: 2
-            }}
-            radius={10}
+            position={[lamp.lat, lamp.lng]}
+            icon={createLampIcon(lamp.status, lamp.state)}
             eventHandlers={{
               click: () => toggleLampStatus(lamp.id),
-              mouseover: (e) => {
-                e.target.setRadius(14);
-              },
-              mouseout: (e) => {
-                e.target.setRadius(10);
-              }
             }}
           >
             <Popup>
@@ -467,7 +524,7 @@ const CityMap = () => {
                 </p>
               </div>
             </Popup>
-          </CircleMarker>
+          </Marker>
         ))}
       </MapContainer>
     </div>

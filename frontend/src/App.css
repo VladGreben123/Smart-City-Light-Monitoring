@@ -23,3 +23,157 @@
 .leaflet-control-attribution a {
   color: #666 !important;
 }
+
+/* Custom Marker Styles */
+
+/* Lamp Marker */
+.lamp-marker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+.lamp-core {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.8), rgba(255,255,255,0) 70%);
+  box-shadow: 0 0 10px currentColor;
+  position: relative;
+  z-index: 2;
+  transition: background-color 0.3s ease;
+}
+
+.lamp-halo {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid;
+  opacity: 0.6;
+  transition: all 0.3s ease;
+  z-index: 1;
+}
+
+.lamp-marker:hover .lamp-halo {
+  width: 30px;
+  height: 30px;
+  opacity: 1;
+  box-shadow: 0 0 15px currentColor;
+}
+
+/* Drone Marker */
+.drone-marker {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));
+  transition: transform 0.2s linear; /* Smooth rotation if added later */
+}
+
+.drone-body {
+  width: 12px;
+  height: 12px;
+  background: #3498db;
+  border-radius: 3px;
+  position: relative;
+  z-index: 2;
+}
+
+.drone-arm {
+  position: absolute;
+  width: 28px;
+  height: 2px;
+  background: #7f8c8d;
+  z-index: 1;
+}
+
+.drone-arm.arm-1 { transform: rotate(45deg); }
+.drone-arm.arm-2 { transform: rotate(-45deg); }
+
+.drone-prop {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: rgba(44, 62, 80, 0.8);
+  border-radius: 50%;
+  animation: spin 0.2s linear infinite;
+}
+
+.drone-prop.tl { top: -2px; left: -2px; }
+.drone-prop.tr { top: -2px; right: -2px; }
+.drone-prop.bl { bottom: -2px; left: -2px; }
+.drone-prop.br { bottom: -2px; right: -2px; }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Droneport Marker */
+.droneport-marker {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.droneport-base {
+  width: 36px;
+  height: 36px;
+  background: #2c3e50;
+  border: 2px solid #34495e;
+  border-radius: 6px;
+  position: relative;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+}
+
+.droneport-pad {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 24px;
+  height: 24px;
+  border: 2px dashed #f1c40f;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.droneport-pad::after {
+  content: 'H';
+  color: #f1c40f;
+  font-weight: bold;
+  font-size: 14px;
+  font-family: monospace;
+}
+
+.droneport-beacon {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 8px;
+  height: 8px;
+  background: #e74c3c;
+  border-radius: 50%;
+  box-shadow: 0 0 5px #e74c3c;
+  animation: beacon-pulse 1.5s infinite;
+}
+
+@keyframes beacon-pulse {
+  0% { opacity: 0.4; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.2); }
+  100% { opacity: 0.4; transform: scale(0.8); }
+}
