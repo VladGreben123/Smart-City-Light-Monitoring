@@ -8,10 +8,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 
 from app.controller import get_controller
+from app.controller.base import LampStatusCode
 from app.database import create_db, engine, get_session
-from app.models import Lamp, LampEvent, Streetlight
+from app.models import Lamp, LampEvent, LampStatus, Streetlight
 from app.polling import polling_loop
 from app.ws import WSManager
+
+
+def _lamp_ws_status(lamp: Lamp) -> str:
+    """Маппинг внутреннего статуса лампы в формат фронтенда."""
+    if lamp.status in (LampStatus.BURNED_OUT, LampStatus.ABSENT, LampStatus.MAINTENANCE):
+        return "broken"
+    return "on" if lamp.is_on else "off"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +36,7 @@ async def lifespan(app: FastAPI):
     _seed_demo_data()
 
     controller = get_controller()
+    app.state.controller = controller
     task = asyncio.create_task(polling_loop(controller, engine, ws_manager))
     logger.info("App started, polling task created")
     yield
@@ -59,11 +68,11 @@ def _seed_demo_data() -> None:
             return
 
         demo_lights = [
-            ("СТ-001", 55.7960, 49.1068, "ул. Четаева, 18", 1),
-            ("СТ-002", 55.7965, 49.1075, "ул. Четаева, 20", 2),
-            ("СТ-003", 55.7970, 49.1082, "ул. Четаева, 22", 3),
-            ("СТ-004", 55.7945, 49.1055, "ул. Деревня Универсиады, 1", 4),
-            ("СТ-005", 55.7950, 49.1060, "ул. Деревня Универсиады, 3", 5),
+            ("СТ-001", 55.752317, 48.744578, "Origin (University)", 1),
+            ("СТ-002", 55.753817, 48.746578, "Sport Complex Area", 2),
+            ("СТ-003", 55.751817, 48.742578, "Technopark Area", 3),
+            ("СТ-004", 55.754817, 48.746578, "Residential Area East", 4),
+            ("СТ-005", 55.753317, 48.745578, "Campus North", 5),
         ]
 
         for name, lat, lon, addr, slave_id in demo_lights:
@@ -182,22 +191,23 @@ async def ws_endpoint(ws: WebSocket):
     await ws_manager.connect(ws)
     logger.info("WebSocket client connected")
 
-    # Отправить начальное состояние всех ламп
+    # Отправить начальное состояние каждой лампы отдельным сообщением
     with Session(engine) as session:
-        lamps = session.exec(select(Lamp)).all()
-        init_data = [
-            {
+        results = session.exec(
+            select(Streetlight, Lamp).join(Lamp, isouter=True)
+        ).all()
+        for sl, lamp in results:
+            if lamp is None:
+                continue
+            msg = {
                 "id": lamp.id,
-                "is_on": lamp.is_on,
-                "failure_probability": round(lamp.failure_probability, 4),
+                "status": _lamp_ws_status(lamp),
+                "state": round(lamp.failure_probability, 4),
+                "lat": sl.latitude,
+                "lng": sl.longitude,
+                "address": sl.address,
             }
-            for lamp in lamps
-        ]
-    await ws.send_text(json.dumps(
-        {"type": "init", "lamps": init_data},
-        ensure_ascii=False,
-        default=str,
-    ))
+            await ws.send_text(json.dumps(msg, ensure_ascii=False))
 
     try:
         while True:
@@ -211,29 +221,44 @@ async def ws_endpoint(ws: WebSocket):
             if lamp_id is None:
                 continue
 
-            # Обработка команд от фронта (toggle is_on)
+            new_status = msg.get("status")
+            if new_status not in ("on", "off", "broken"):
+                continue
+
             with Session(engine) as session:
                 lamp = session.get(Lamp, lamp_id)
                 if not lamp:
                     continue
 
-                if "is_on" in msg:
-                    lamp.is_on = bool(msg["is_on"])
-                    session.commit()
+                sl = session.get(Streetlight, lamp.streetlight_id)
+                controller = app.state.controller
 
-                    await ws_manager.broadcast(
-                        {
-                            "type": "update",
-                            "lamps": [{
-                                "id": lamp.id,
-                                "is_on": lamp.is_on,
-                                "failure_probability": round(
-                                    lamp.failure_probability, 4
-                                ),
-                            }],
-                        },
-                        exclude=ws,
-                    )
+                if new_status == "broken":
+                    lamp.status = LampStatus.BURNED_OUT
+                    lamp.is_on = False
+                    await controller.set_status(sl.modbus_slave_id, LampStatusCode.BURNED_OUT)
+                elif new_status == "on":
+                    lamp.status = LampStatus.OK
+                    lamp.is_on = True
+                    await controller.set_status(sl.modbus_slave_id, LampStatusCode.OK)
+                    await controller.write_lamp_on(sl.modbus_slave_id, True)
+                else:  # "off"
+                    if lamp.status == LampStatus.BURNED_OUT:
+                        lamp.status = LampStatus.OK
+                        await controller.set_status(sl.modbus_slave_id, LampStatusCode.OK)
+                    lamp.is_on = False
+                    await controller.write_lamp_on(sl.modbus_slave_id, False)
+                session.commit()
+
+                # Отправить обновление всем остальным клиентам
+                await ws_manager.broadcast(
+                    {
+                        "id": lamp.id,
+                        "status": new_status,
+                        "state": round(lamp.failure_probability, 4),
+                    },
+                    exclude=ws,
+                )
 
     except WebSocketDisconnect:
         ws_manager.disconnect(ws)

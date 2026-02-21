@@ -164,13 +164,18 @@ async def _poll_once(
                     lamp.failure_probability,
                 )
 
+                if lamp.status in (LampStatus.BURNED_OUT, LampStatus.ABSENT, LampStatus.MAINTENANCE):
+                    ws_status = "broken"
+                else:
+                    ws_status = "on" if lamp.is_on else "off"
                 updates.append({
                     "id": lamp.id,
-                    "is_on": lamp.is_on,
-                    "failure_probability": round(lamp.failure_probability, 4),
+                    "status": ws_status,
+                    "state": round(lamp.failure_probability, 4),
                 })
 
         session.commit()
 
-    if updates:
-        await ws_manager.broadcast({"type": "update", "lamps": updates})
+    # Отправить каждую лампу отдельным сообщением (формат фронта)
+    for upd in updates:
+        await ws_manager.broadcast(upd)

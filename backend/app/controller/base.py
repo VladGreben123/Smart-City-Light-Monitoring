@@ -36,3 +36,6 @@ class BaseController(ABC):
     @abstractmethod
     async def write_reflector(self, slave_id: int, open: bool) -> None:
         """Открыть/закрыть отражатель для посадки дрона."""
+
+    async def set_status(self, slave_id: int, status: LampStatusCode) -> None:
+        """Установить статус лампы (для синхронизации с внешними изменениями)."""

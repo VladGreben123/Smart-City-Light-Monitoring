@@ -118,3 +118,9 @@ class MockController(BaseController):
     async def write_reflector(self, slave_id: int, open: bool) -> None:
         state = self._get_state(slave_id)
         state.reflector_position = 180 if open else 0
+
+    async def set_status(self, slave_id: int, status: LampStatusCode) -> None:
+        state = self._get_state(slave_id)
+        state.status = status
+        if status == LampStatusCode.BURNED_OUT:
+            state.is_on = False
