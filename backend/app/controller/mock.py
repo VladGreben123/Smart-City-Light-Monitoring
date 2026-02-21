@@ -60,22 +60,10 @@ class MockController(BaseController):
         if state.is_on:
             state.hours_active += 1
 
-        # Шанс перегореть: 3%
-        if state.is_on and random.random() < 0.03:
-            state.status = LampStatusCode.BURNED_OUT
-            return LampData(
-                status=state.status,
-                is_on=False,
-                hours_active=state.hours_active,
-                junction_temp_avg=state.junction_temp_avg,
-                voltage_spike_count=state.voltage_spike_count + 1,
-                on_off_cycles=state.on_off_cycles,
-                humidity_avg=state.humidity_avg,
-                voltage=0.0,
-                current_ma=0.0,
-                ambient_temp=state.ambient_temp + random.uniform(-0.5, 0.5),
-                reflector_position=state.reflector_position,
-            )
+        # Шанс перегореть: ОТКЛЮЧЕН (по требованию пользователя, лампы не ломаются сами)
+        # if state.is_on and random.random() < 0.03:
+        #    state.status = LampStatusCode.BURNED_OUT
+        #    return LampData(...)
 
         # Плавающие показатели
         state.junction_temp_avg += random.uniform(-0.5, 0.5)

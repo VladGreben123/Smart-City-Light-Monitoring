@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css'; // CRITICAL: Required for Leaflet styles
 import L from 'leaflet';
@@ -65,66 +65,26 @@ const createDroneportIcon = () => {
   });
 };
 
-const generateLamps = () => {
-  const lamps = [];
-  let id = 1;
-
-  // Function to create a lamp
-  const addLamp = (lat, lng, address) => {
-    lamps.push({
-      id: id++,
-      lat,
-      lng,
-      status: Math.random() > 0.8 ? 'off' : 'on', // Random initial status
-      state: Math.random() * 0.5 + 0.5, // Random initial state 0.5-1.0
-      address
-    });
+const mapStatusFromApi = (status, isOn) => {
+    // If status comes from WebSocket (already mapped)
+    if (status === 'on' || status === 'off') {
+      return status;
+    }
+    // For any other status (ok, burned_out, etc), rely on isOn (time of day)
+    return isOn ? 'on' : 'off';
   };
 
-  // 1. Universitetskaya St (approximate path)
-  // Starting near Origin, going South-West
-  for (let i = 0; i < 15; i++) {
-    addLamp(ORIGIN_LAT - i * 0.0004, ORIGIN_LNG - i * 0.0002, `Universitetskaya St #${i+1}`);
-  }
-
-  // 2. Sportivnaya St (approximate path)
-  // Perpendicular, going South-East
-  for (let i = 0; i < 15; i++) {
-    addLamp(ORIGIN_LAT - i * 0.0001, ORIGIN_LNG + i * 0.0005, `Sportivnaya St #${i+1}`);
-  }
-
-  // 3. Central Park Ring (approximate circle)
-  const parkLat = 55.7510;
-  const parkLng = 48.7480;
-  const radius = 0.0015;
-  for (let i = 0; i < 12; i++) {
-    const angle = (i / 12) * 2 * Math.PI;
-    addLamp(
-      parkLat + radius * Math.cos(angle) * 0.6, // Scale lat to look circular on map
-      parkLng + radius * Math.sin(angle),
-      `Central Park #${i+1}`
-    );
-  }
-
-   // 4. Technopark Loop
-   const technoLat = 55.751817;
-   const technoLng = 48.742578;
-   for (let i = 0; i < 10; i++) {
-      addLamp(technoLat + i * 0.0003, technoLng - i * 0.0001, `Technopark Loop #${i+1}`);
-   }
-
-   // 5. Residential District
-   const resLat = 55.754817;
-   const resLng = 48.746578;
-   for(let i=0; i< 10; i++) {
-       addLamp(resLat - i * 0.0002, resLng + i * 0.0004, `Residential District #${i+1}`);
-   }
-
-
-  return lamps;
+const mapLampFromApi = (item) => {
+  const state = 1 - (item.failure_probability ?? 0);
+  return {
+    id: item.lamp_id,
+    lat: item.latitude,
+    lng: item.longitude,
+    status: mapStatusFromApi(item.status, item.is_on),
+    state: Math.max(0, Math.min(1, state)),
+    address: item.address
+  };
 };
-
-const initialLamps = generateLamps();
 
 const getBorderColor = (status) => {
   switch (status) {
@@ -143,10 +103,9 @@ const getColor = (stat) => {
 
 const getLabel = (status) => {
   switch (status) {
-    case 'on': return 'Operational';
-    case 'off': return 'Powered Off';
-    case 'broken': return 'Fault Detected';
-    default: return 'Unknown';
+    case 'on': return 'Работает';
+    case 'off': return 'Выключена';
+    default: return 'Неизвестно';
   }
 };
 
@@ -165,23 +124,55 @@ const MapUpdater = () => {
 };
 
 const CityMap = () => {
-  const [lamps, setLamps] = useState(initialLamps);
-  const [wsStatus, setWsStatus] = useState('Connecting...');
+  const [lamps, setLamps] = useState([]);
+  const [wsStatus, setWsStatus] = useState('Подключение...');
   const ws = useRef(null);
   const reconnectTimeout = useRef(null);
+  const connectWebSocketRef = useRef(null);
   const [droneStatus, setDroneStatus] = useState('idle');
   const [dronePos, setDronePos] = useState({ lat: DRONEPORT_LAT, lng: DRONEPORT_LNG });
   const [dronePath, setDronePath] = useState([]);
   const [currentTargetIndex, setCurrentTargetIndex] = useState(0);
   const animationRef = useRef(null);
   const dronePosRef = useRef({ lat: DRONEPORT_LAT, lng: DRONEPORT_LNG });
-  const lampsRef = useRef(initialLamps);
+  const lampsRef = useRef([]);
   const droneStatusRef = useRef('idle');
   const targetIndexRef = useRef(0);
   const waitUntilRef = useRef(null);
   const currentSpeedRef = useRef(0); // For smooth acceleration
+  
+  // Track manually broken lamps for testing (IDs)
+  const brokenLampIdsRef = useRef(new Set());
+  const [randomFailureEnabled, setRandomFailureEnabled] = useState(false);
+  const failureProbability = 0.3;
+  const checkInterval = 5000;
 
-  const connectWebSocket = () => {
+  const breakRandomLamp = () => {
+    setRandomFailureEnabled(true);
+  };
+
+  const fixAllLamps = () => {
+    brokenLampIdsRef.current.clear();
+    setRandomFailureEnabled(false);
+    setLamps(prev => prev.map(l => ({ ...l, state: 1.0 })));
+  };
+
+  useEffect(() => {
+    if (!randomFailureEnabled) return;
+    const id = setInterval(() => {
+      setLamps(prev => prev.map(l => {
+        if (brokenLampIdsRef.current.has(l.id)) return l;
+        if (Math.random() < failureProbability) {
+          brokenLampIdsRef.current.add(l.id);
+          return { ...l, state: 0.0 };
+        }
+        return l;
+      }));
+    }, checkInterval);
+    return () => clearInterval(id);
+  }, [randomFailureEnabled]);
+
+  const connectWebSocket = useCallback(() => {
     // Clear existing timeout if any
     if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
 
@@ -190,7 +181,7 @@ const CityMap = () => {
 
       ws.current.onopen = () => {
         console.log('Connected to WebSocket');
-        setWsStatus('Connected');
+        setWsStatus('Подключено');
       };
 
       ws.current.onmessage = (event) => {
@@ -198,12 +189,27 @@ const CityMap = () => {
           const data = JSON.parse(event.data);
           // console.log('Received update:', data);
           
-          if (data.id && data.status) {
-            setLamps(prevLamps => 
-              prevLamps.map(lamp => 
-                lamp.id === data.id ? { ...lamp, status: data.status } : lamp
-              )
-            );
+          if (data.id) {
+            setLamps(prevLamps => {
+              const index = prevLamps.findIndex(lamp => lamp.id === data.id);
+              const prev = index >= 0 ? prevLamps[index] : null;
+              const nextLamp = {
+                id: data.id,
+                lat: data.lat ?? prev?.lat ?? ORIGIN_LAT,
+                lng: data.lng ?? prev?.lng ?? ORIGIN_LNG,
+                address: data.address ?? prev?.address ?? '',
+                status: data.status ? mapStatusFromApi(data.status, data.is_on ?? (prev?.status === 'on')) : (prev?.status ?? 'off'),
+                state: brokenLampIdsRef.current.has(data.id) ? 0.0 : (typeof data.state === 'number' ? data.state : (prev?.state ?? 1))
+              };
+
+              if (index === -1) {
+                return [...prevLamps, nextLamp];
+              }
+
+              return prevLamps.map(lamp =>
+                lamp.id === data.id ? nextLamp : lamp
+              );
+            });
           }
         } catch (error) {
           console.error('Error parsing message:', error);
@@ -212,37 +218,58 @@ const CityMap = () => {
 
       ws.current.onclose = () => {
         console.log('WebSocket closed');
-        setWsStatus('Disconnected');
+        setWsStatus('Отключено');
         // Attempt to reconnect after 3 seconds
         reconnectTimeout.current = setTimeout(() => {
-          setWsStatus('Reconnecting...');
-          connectWebSocket();
+          setWsStatus('Переподключение...');
+          connectWebSocketRef.current?.();
         }, 3000);
       };
 
       ws.current.onerror = (error) => {
         console.error('WebSocket error:', error);
-        setWsStatus('Error');
+        setWsStatus('Ошибка');
         // Close connection to trigger onclose/reconnect logic
         if(ws.current) ws.current.close(); 
       };
 
     } catch (err) {
       console.error('Failed to create WebSocket:', err);
-      setWsStatus('Failed');
+      setWsStatus('Сбой');
     }
-  };
+  }, []);
 
   useEffect(() => {
-    connectWebSocket();
+    connectWebSocketRef.current = connectWebSocket;
+  }, [connectWebSocket]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('http://localhost:8000/api/lamps', { signal: controller.signal })
+      .then(res => res.json())
+      .then(data => {
+        const mapped = data
+          .filter(item => item.lamp_id)
+          .map(mapLampFromApi)
+          .map(l => {
+            if (brokenLampIdsRef.current.has(l.id)) l.state = 0.0;
+            return l;
+          });
+        setLamps(mapped);
+      })
+      .catch(() => {});
+
+    const wsTimeout = setTimeout(() => connectWebSocket(), 0);
 
     return () => {
+      clearTimeout(wsTimeout);
+      controller.abort();
       if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
       if (ws.current) {
         ws.current.close();
       }
     };
-  }, []);
+  }, [connectWebSocket]);
 
   useEffect(() => {
     dronePosRef.current = dronePos;
@@ -259,19 +286,6 @@ const CityMap = () => {
   useEffect(() => {
     targetIndexRef.current = currentTargetIndex;
   }, [currentTargetIndex]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setLamps(prev =>
-        prev.map(l => {
-          const next = l.state - 0.01;
-          return { ...l, state: next < 0 ? 0 : next };
-        })
-      );
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, []);
 
   useEffect(() => {
     if (droneStatus !== 'toLamp' && droneStatus !== 'return') return;
@@ -334,18 +348,16 @@ const CityMap = () => {
           const idx = targetIndexRef.current;
           const lampId = path[idx];
 
-          const repairedState = 1;
-
-          setLamps(prev =>
-            prev.map(l =>
-              l.id === lampId
-                ? { ...l, state: repairedState }
-                : l
-            )
-          );
+          // Simulate repair locally
+          if (brokenLampIdsRef.current.has(lampId)) {
+            brokenLampIdsRef.current.delete(lampId);
+            setLamps(prev => prev.map(l => 
+              l.id === lampId ? { ...l, state: 1.0 } : l
+            ));
+          }
 
           if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-            const message = JSON.stringify({ id: lampId, state: repairedState });
+            const message = JSON.stringify({ id: lampId, state: 1 });
             ws.current.send(message);
           }
 
@@ -391,26 +403,7 @@ const CityMap = () => {
     };
   }, [droneStatus, dronePath]);
 
-  const toggleLampStatus = (id) => {
-    const lamp = lamps.find(l => l.id === id);
-    if (!lamp) return;
-
-    const newStatus = lamp.status === 'off' ? 'on' : 'off';
-
-    setLamps(prevLamps => 
-      prevLamps.map(l => l.id === id ? { ...l, status: newStatus } : l)
-    );
-
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      const message = JSON.stringify({ id, status: newStatus });
-      ws.current.send(message);
-      console.log('Sent:', message);
-    } else {
-      console.warn('WebSocket not open, change not sent to server');
-    }
-  };
-
-  const startDroneMission = () => {
+  const startDroneMission = useCallback(() => {
     if (droneStatus !== 'idle') return;
     const brokenLamps = lamps.filter(l => l.state <= 0.33);
     if (brokenLamps.length === 0) return;
@@ -425,13 +418,14 @@ const CityMap = () => {
     setCurrentTargetIndex(0);
     setDronePos({ lat: DRONEPORT_LAT, lng: DRONEPORT_LNG });
     setDroneStatus('toLamp');
-  };
+  }, [droneStatus, lamps]);
 
   useEffect(() => {
     if (droneStatus !== 'idle') return;
     if (!lamps.some(l => l.state <= 0.33)) return;
-    startDroneMission();
-  }, [lamps, droneStatus]);
+    const timeout = setTimeout(() => startDroneMission(), 0);
+    return () => clearTimeout(timeout);
+  }, [lamps, droneStatus, startDroneMission]);
 
   return (
     <div style={{ height: '100vh', width: '100%', position: 'relative', fontFamily: 'sans-serif', color: '#333' }}>
@@ -440,23 +434,65 @@ const CityMap = () => {
         top: '10px', 
         right: '10px', 
         zIndex: 1000, 
-        background: 'white', 
-        padding: '8px 12px', 
-        borderRadius: '20px',
-        boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
-        fontSize: '13px',
-        fontWeight: '500',
         display: 'flex',
-        alignItems: 'center',
+        flexDirection: 'column',
+        alignItems: 'flex-end',
         gap: '8px'
       }}>
-        <span style={{ 
-          width: '8px', 
-          height: '8px', 
-          borderRadius: '50%', 
-          background: wsStatus === 'Connected' ? '#2ecc71' : '#e74c3c' 
-        }}></span>
-        {wsStatus}
+        <div style={{
+          background: 'white', 
+          padding: '8px 12px', 
+          borderRadius: '20px',
+          boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
+          fontSize: '13px',
+          fontWeight: '500',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <span style={{ 
+            width: '8px', 
+            height: '8px', 
+            borderRadius: '50%', 
+            background: wsStatus === 'Подключено' ? '#2ecc71' : '#e74c3c' 
+          }}></span>
+          {wsStatus}
+        </div>
+
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button 
+            onClick={breakRandomLamp}
+            style={{
+              padding: '8px 12px',
+              background: '#e74c3c',
+              color: 'white',
+              border: 'none',
+              borderRadius: '20px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: '500',
+              boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
+            }}
+          >
+            Включить случайные поломки
+          </button>
+          <button 
+            onClick={fixAllLamps}
+            style={{
+              padding: '8px 12px',
+              background: '#2ecc71',
+              color: 'white',
+              border: 'none',
+              borderRadius: '20px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: '500',
+              boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
+            }}
+          >
+            Выключить случайные поломки и починить все
+          </button>
+        </div>
       </div>
 
       <MapContainer 
@@ -505,25 +541,19 @@ const CityMap = () => {
             key={lamp.id} 
             position={[lamp.lat, lamp.lng]}
             icon={createLampIcon(lamp.status, lamp.state)}
-            eventHandlers={{
-              click: () => toggleLampStatus(lamp.id),
-            }}
           >
             <Popup>
-              <div style={{ minWidth: '150px' }}>
-                <h4 style={{ margin: '0 0 5px' }}>Lamp #{lamp.id}</h4>
-                <p style={{ margin: '2px 0', fontSize: '13px', color: '#555' }}>{lamp.address}</p>
-                <p style={{ margin: '2px 0', fontSize: '13px' }}>
-                  Status: <strong style={{ color: getBorderColor(lamp.status) }}>{getLabel(lamp.status)}</strong>
-                </p>
-                <p style={{ margin: '2px 0', fontSize: '13px' }}>
-                  Health: <strong style={{ color: getColor(lamp.state) }}>{lamp.state.toFixed(2)}</strong>
-                </p>
-                <p style={{ margin: '5px 0 0', fontSize: '11px', color: '#888' }}>
-                  Click to toggle power
-                </p>
-              </div>
-            </Popup>
+            <div style={{ minWidth: '150px' }}>
+              <h4 style={{ margin: '0 0 5px' }}>Лампа №{lamp.id}</h4>
+              <p style={{ margin: '2px 0', fontSize: '13px', color: '#555' }}>{lamp.address}</p>
+              <p style={{ margin: '2px 0', fontSize: '13px' }}>
+                Состояние: <strong style={{ color: getBorderColor(lamp.status) }}>{getLabel(lamp.status)}</strong>
+              </p>
+              <p style={{ margin: '2px 0', fontSize: '13px' }}>
+                Целостность: <strong style={{ color: getColor(lamp.state) }}>{(lamp.state * 100).toFixed(0)}%</strong>
+              </p>
+            </div>
+          </Popup>
           </Marker>
         ))}
       </MapContainer>

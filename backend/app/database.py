@@ -1,6 +1,6 @@
 from sqlmodel import SQLModel, Session, create_engine
 
-DATABASE_URL = "sqlite:///lamps.db"
+DATABASE_URL = "sqlite:///lamps_30.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 

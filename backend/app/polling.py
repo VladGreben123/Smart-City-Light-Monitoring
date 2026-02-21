@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 from sqlmodel import Session, select
@@ -20,26 +20,44 @@ STATUS_MAP = {
     LampStatusCode.BURNED_OUT: LampStatus.BURNED_OUT,
 }
 
+REPAIR_ON_DELAY_SECONDS = 3
+_repair_delay_until: dict[int, datetime] = {}
+
+
+def schedule_repair_delay(lamp_id: int) -> None:
+    _repair_delay_until[lamp_id] = datetime.utcnow() + timedelta(seconds=REPAIR_ON_DELAY_SECONDS)
+
+
+def is_in_repair_delay(lamp_id: int) -> bool:
+    until = _repair_delay_until.get(lamp_id)
+    if until is None:
+        return False
+    if datetime.utcnow() >= until:
+        _repair_delay_until.pop(lamp_id, None)
+        return False
+    return True
+
 
 async def _get_failure_probability(client: httpx.AsyncClient, lamp: Lamp) -> float:
     """Запросить вероятность отказа у AI-сервиса."""
-    try:
-        resp = await client.post(
-            f"{settings.AI_SERVICE_URL}/predict",
-            json={
-                "hours_active": lamp.hours_active,
-                "on_off_cycles": lamp.on_off_cycles,
-                "avg_temp_exposure": lamp.ambient_temp,
-                "temp_fluctuations": int(abs(lamp.junction_temp_avg - lamp.ambient_temp)),
-                "voltage_spikes": lamp.voltage_spike_count,
-                "humidity_exposure": lamp.humidity_avg,
-            },
-            timeout=2.0,
-        )
-        if resp.status_code == 200:
-            return resp.json().get("failure_probability", 0.0)
-    except Exception:
-        logger.debug("AI service unavailable, using fallback")
+    # TODO: Временно отключено, так как сервис AI не запущен (вызывает 502 Bad Gateway)
+    # try:
+    #     resp = await client.post(
+    #         f"{settings.AI_SERVICE_URL}/predict",
+    #         json={
+    #             "hours_active": lamp.hours_active,
+    #             "on_off_cycles": lamp.on_off_cycles,
+    #             "avg_temp_exposure": lamp.ambient_temp,
+    #             "temp_fluctuations": int(abs(lamp.junction_temp_avg - lamp.ambient_temp)),
+    #             "voltage_spikes": lamp.voltage_spike_count,
+    #             "humidity_exposure": lamp.humidity_avg,
+    #         },
+    #         timeout=2.0,
+    #     )
+    #     if resp.status_code == 200:
+    #         return resp.json().get("failure_probability", 0.0)
+    # except Exception:
+    #     logger.debug("AI service unavailable, using fallback")
     return lamp.failure_probability  # оставить прежнее значение
 
 
@@ -76,7 +94,6 @@ async def _poll_once(
         updates: list[dict] = []
 
         async with httpx.AsyncClient() as http_client:
-            # Определить: сейчас темно или светло?
             dark = await is_dark_now(http_client)
 
             for sl in streetlights:
@@ -85,26 +102,6 @@ async def _poll_once(
                 ).first()
                 if lamp is None:
                     continue
-
-                # Управление вкл/выкл по рассвету/закату
-                if dark is not None:
-                    should_be_on = dark
-                    if lamp.is_on != should_be_on and lamp.status != LampStatus.BURNED_OUT:
-                        try:
-                            await controller.write_lamp_on(
-                                sl.modbus_slave_id, should_be_on
-                            )
-                            logger.info(
-                                "Daylight control: %s lamp slave_id=%d (%s)",
-                                "ON" if should_be_on else "OFF",
-                                sl.modbus_slave_id,
-                                sl.name,
-                            )
-                        except Exception:
-                            logger.warning(
-                                "Failed to switch lamp slave_id=%d",
-                                sl.modbus_slave_id,
-                            )
 
                 try:
                     data = await controller.read_lamp_data(sl.modbus_slave_id)
@@ -120,7 +117,6 @@ async def _poll_once(
                 new_status = STATUS_MAP.get(data.status, LampStatus.OK)
 
                 lamp.status = new_status
-                lamp.is_on = data.is_on
                 lamp.hours_active = data.hours_active
                 lamp.junction_temp_avg = data.junction_temp_avg
                 lamp.voltage_spike_count = data.voltage_spike_count
@@ -133,6 +129,35 @@ async def _poll_once(
                 lamp.reflector_position = data.reflector_position
                 lamp.last_seen = datetime.utcnow()
                 lamp.updated_at = datetime.utcnow()
+                if lamp.status in (LampStatus.BURNED_OUT, LampStatus.ABSENT, LampStatus.MAINTENANCE):
+                    # lamp.is_on = False # User requested state depends ONLY on time
+                    pass
+
+                should_be_on = lamp.is_on
+                if dark is not None:
+                    should_be_on = dark
+                    # if lamp.status in (LampStatus.BURNED_OUT, LampStatus.ABSENT, LampStatus.MAINTENANCE):
+                    #     should_be_on = False
+                    if is_in_repair_delay(lamp.id):
+                        should_be_on = False
+
+                    if lamp.is_on != should_be_on:
+                        try:
+                            await controller.write_lamp_on(
+                                sl.modbus_slave_id, should_be_on
+                            )
+                            lamp.is_on = should_be_on
+                            logger.info(
+                                "Daylight control: %s lamp slave_id=%d (%s)",
+                                "ON" if should_be_on else "OFF",
+                                sl.modbus_slave_id,
+                                sl.name,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Failed to switch lamp slave_id=%d",
+                                sl.modbus_slave_id,
+                            )
 
                 # Запрос вероятности отказа от AI
                 lamp.failure_probability = await _get_failure_probability(
@@ -164,10 +189,10 @@ async def _poll_once(
                     lamp.failure_probability,
                 )
 
-                if lamp.status in (LampStatus.BURNED_OUT, LampStatus.ABSENT, LampStatus.MAINTENANCE):
-                    ws_status = "broken"
-                else:
-                    ws_status = "on" if lamp.is_on else "off"
+                # if lamp.status in (LampStatus.BURNED_OUT, LampStatus.ABSENT, LampStatus.MAINTENANCE):
+                #     ws_status = "broken"
+                # else:
+                ws_status = "on" if lamp.is_on else "off"
                 updates.append({
                     "id": lamp.id,
                     "status": ws_status,

@@ -31,12 +31,20 @@ async def _fetch_sun_times(client: httpx.AsyncClient) -> tuple[datetime, datetim
             },
             timeout=5.0,
         )
+        resp.raise_for_status()
         data = resp.json()
-        if data.get("status") != "OK":
+        if data.get("status") != "OK" or "results" not in data:
+            logger.warning("Unexpected sunrise-sunset response: %s", data)
             return None
 
-        sunrise = datetime.fromisoformat(data["results"]["sunrise"])
-        sunset = datetime.fromisoformat(data["results"]["sunset"])
+        sunrise_raw = data["results"].get("sunrise")
+        sunset_raw = data["results"].get("sunset")
+        if not sunrise_raw or not sunset_raw:
+            logger.warning("Missing sunrise/sunset in response: %s", data)
+            return None
+
+        sunrise = datetime.fromisoformat(sunrise_raw)
+        sunset = datetime.fromisoformat(sunset_raw)
 
         # Очистить старый кэш, сохранить новый
         _cache.clear()
@@ -46,7 +54,7 @@ async def _fetch_sun_times(client: httpx.AsyncClient) -> tuple[datetime, datetim
         return sunrise, sunset
 
     except Exception:
-        logger.warning("Failed to fetch sun times")
+        logger.warning("Failed to fetch sun times", exc_info=True)
         return None
 
 

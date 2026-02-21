@@ -5,13 +5,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from app.controller import get_controller
 from app.controller.base import LampStatusCode
 from app.database import create_db, engine, get_session
 from app.models import Lamp, LampEvent, LampStatus, Streetlight
-from app.polling import polling_loop
+from app.polling import polling_loop, schedule_repair_delay
 from app.ws import WSManager
 
 
@@ -61,71 +61,36 @@ app.add_middleware(
 # ── Demo seed ────────────────────────────────────────────
 
 def _generate_lamp_positions() -> list[tuple[str, float, float, str]]:
-    """Генерация позиций ламп — зеркалит логику generateLamps() на фронте."""
+    """Генерация позиций ламп."""
     ORIGIN_LAT = 55.752317
     ORIGIN_LNG = 48.744578
-    import math
 
     lamps: list[tuple[str, float, float, str]] = []
 
-    # 1. Universitetskaya St (15 ламп)
-    for i in range(15):
+    for i in range(30):
         lamps.append((
             f"Universitetskaya St #{i+1}",
-            ORIGIN_LAT - i * 0.0004,
+            ORIGIN_LAT - i * 0.00035,
             ORIGIN_LNG - i * 0.0002,
             f"Universitetskaya St #{i+1}",
-        ))
-
-    # 2. Sportivnaya St (15 ламп)
-    for i in range(15):
-        lamps.append((
-            f"Sportivnaya St #{i+1}",
-            ORIGIN_LAT - i * 0.0001,
-            ORIGIN_LNG + i * 0.0005,
-            f"Sportivnaya St #{i+1}",
-        ))
-
-    # 3. Central Park Ring (12 ламп)
-    park_lat, park_lng, radius = 55.7510, 48.7480, 0.0015
-    for i in range(12):
-        angle = (i / 12) * 2 * math.pi
-        lamps.append((
-            f"Central Park #{i+1}",
-            park_lat + radius * math.cos(angle) * 0.6,
-            park_lng + radius * math.sin(angle),
-            f"Central Park #{i+1}",
-        ))
-
-    # 4. Technopark Loop (10 ламп)
-    techno_lat, techno_lng = 55.751817, 48.742578
-    for i in range(10):
-        lamps.append((
-            f"Technopark Loop #{i+1}",
-            techno_lat + i * 0.0003,
-            techno_lng - i * 0.0001,
-            f"Technopark Loop #{i+1}",
-        ))
-
-    # 5. Residential District (10 ламп)
-    res_lat, res_lng = 55.754817, 48.746578
-    for i in range(10):
-        lamps.append((
-            f"Residential District #{i+1}",
-            res_lat - i * 0.0002,
-            res_lng + i * 0.0004,
-            f"Residential District #{i+1}",
         ))
 
     return lamps
 
 
 def _seed_demo_data() -> None:
-    """Создать демо-данные, если БД пуста."""
+    """Создать демо-данные, если БД пуста или не соответствует ожидаемому размеру."""
     with Session(engine) as session:
-        existing = session.exec(select(Streetlight)).first()
-        if existing:
+        streetlights = session.exec(select(Streetlight)).all()
+        lamps = session.exec(select(Lamp)).all()
+        if len(streetlights) == 30 and len(lamps) == 30:
             return
+
+        if streetlights or lamps:
+            session.exec(delete(LampEvent))
+            session.exec(delete(Lamp))
+            session.exec(delete(Streetlight))
+            session.commit()
 
         positions = _generate_lamp_positions()
 
@@ -140,7 +105,7 @@ def _seed_demo_data() -> None:
             session.add(sl)
             session.flush()
 
-            lamp = Lamp(streetlight_id=sl.id, is_on=True)
+            lamp = Lamp(streetlight_id=sl.id, is_on=False)
             session.add(lamp)
 
         session.commit()
@@ -288,19 +253,35 @@ async def ws_endpoint(ws: WebSocket):
                     controller = app.state.controller
 
                     # state=1 означает "починено" → failure_probability=0, статус OK
+                    old_status = lamp.status
                     lamp.failure_probability = round(1.0 - float(new_state), 4)
                     if float(new_state) >= 0.66:
                         lamp.status = LampStatus.OK
                         await controller.set_status(sl.modbus_slave_id, LampStatusCode.OK)
+                    lamp.is_on = False
+                    schedule_repair_delay(lamp.id)
+                    event = LampEvent(
+                        lamp_id=lamp.id,
+                        event_type="replaced",
+                        details=json.dumps({
+                            "from": old_status.value,
+                            "to": lamp.status.value,
+                        }),
+                    )
+                    session.add(event)
                     session.commit()
 
                     await ws_manager.broadcast(
-                        {"id": lamp.id, "state": round(float(new_state), 4)},
+                        {
+                            "id": lamp.id,
+                            "status": _lamp_ws_status(lamp),
+                            "state": round(float(new_state), 4),
+                        },
                         exclude=ws,
                     )
                 continue
 
-            if new_status not in ("on", "off", "broken"):
+            if new_status != "broken":
                 continue
 
             with Session(engine) as session:
@@ -311,28 +292,16 @@ async def ws_endpoint(ws: WebSocket):
                 sl = session.get(Streetlight, lamp.streetlight_id)
                 controller = app.state.controller
 
-                if new_status == "broken":
-                    lamp.status = LampStatus.BURNED_OUT
-                    lamp.is_on = False
-                    await controller.set_status(sl.modbus_slave_id, LampStatusCode.BURNED_OUT)
-                elif new_status == "on":
-                    lamp.status = LampStatus.OK
-                    lamp.is_on = True
-                    await controller.set_status(sl.modbus_slave_id, LampStatusCode.OK)
-                    await controller.write_lamp_on(sl.modbus_slave_id, True)
-                else:  # "off"
-                    if lamp.status == LampStatus.BURNED_OUT:
-                        lamp.status = LampStatus.OK
-                        await controller.set_status(sl.modbus_slave_id, LampStatusCode.OK)
-                    lamp.is_on = False
-                    await controller.write_lamp_on(sl.modbus_slave_id, False)
+                lamp.status = LampStatus.BURNED_OUT
+                lamp.is_on = False
+                await controller.set_status(sl.modbus_slave_id, LampStatusCode.BURNED_OUT)
                 session.commit()
 
                 # Отправить обновление всем остальным клиентам
                 await ws_manager.broadcast(
                     {
                         "id": lamp.id,
-                        "status": new_status,
+                        "status": _lamp_ws_status(lamp),
                         "state": round(1.0 - lamp.failure_probability, 4),
                     },
                     exclude=ws,
