@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 
 from app.config import settings
 from app.controller.base import BaseController, LampStatusCode
+from app.daylight import is_dark_now
 from app.models import Lamp, LampEvent, LampStatus, Streetlight
 from app.ws import WSManager
 
@@ -75,12 +76,35 @@ async def _poll_once(
         updates: list[dict] = []
 
         async with httpx.AsyncClient() as http_client:
+            # Определить: сейчас темно или светло?
+            dark = await is_dark_now(http_client)
+
             for sl in streetlights:
                 lamp = session.exec(
                     select(Lamp).where(Lamp.streetlight_id == sl.id)
                 ).first()
                 if lamp is None:
                     continue
+
+                # Управление вкл/выкл по рассвету/закату
+                if dark is not None:
+                    should_be_on = dark
+                    if lamp.is_on != should_be_on and lamp.status != LampStatus.BURNED_OUT:
+                        try:
+                            await controller.write_lamp_on(
+                                sl.modbus_slave_id, should_be_on
+                            )
+                            logger.info(
+                                "Daylight control: %s lamp slave_id=%d (%s)",
+                                "ON" if should_be_on else "OFF",
+                                sl.modbus_slave_id,
+                                sl.name,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Failed to switch lamp slave_id=%d",
+                                sl.modbus_slave_id,
+                            )
 
                 try:
                     data = await controller.read_lamp_data(sl.modbus_slave_id)
