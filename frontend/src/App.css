@@ -15,3 +15,11 @@
   height: 100%;
 }
 
+.leaflet-control-attribution {
+  background: rgba(255, 255, 255, 0.5) !important;
+  font-size: 10px !important;
+  color: #666 !important;
+}
+.leaflet-control-attribution a {
+  color: #666 !important;
+}

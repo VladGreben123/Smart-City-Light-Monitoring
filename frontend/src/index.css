@@ -21,3 +21,6 @@ html, body, #root {
   overflow: hidden;
 }
 
+.leaflet-control-attribution {
+  display: none;
+}
