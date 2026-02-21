@@ -1,13 +1,29 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, CircleMarker, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet';
 
-// Mock initial data for lamps
+// Innopolis Origin Point (University)
+const ORIGIN_LAT = 55.752317;
+const ORIGIN_LNG = 48.744578;
+
+// Convert local metric coordinates (x, y) to global (lat, lng)
+const localToGlobal = (x, y) => {
+  // Approximate conversion for short distances
+  const METERS_PER_DEGREE_LAT = 111320;
+  const METERS_PER_DEGREE_LNG = 40075000 * Math.cos((ORIGIN_LAT * Math.PI) / 180) / 360;
+
+  const lat = ORIGIN_LAT + (y / METERS_PER_DEGREE_LAT);
+  const lng = ORIGIN_LNG + (x / METERS_PER_DEGREE_LNG);
+  
+  return [lat, lng];
+};
+
+// Mock initial data for lamps (Local coordinates in meters relative to Origin)
 const initialLamps = [
-  { id: 1, lat: 55.751244, lng: 37.618423, status: 'off', address: 'Center 1' },
-  { id: 2, lat: 55.752244, lng: 37.619423, status: 'on', address: 'North East' },
-  { id: 3, lat: 55.750244, lng: 37.617423, status: 'broken', address: 'South West' },
-  { id: 4, lat: 55.751244, lng: 37.620423, status: 'off', address: 'East' },
-  { id: 5, lat: 55.753244, lng: 37.618423, status: 'on', address: 'North' },
+  { id: 1, x: 0, y: 0, status: 'off', address: 'Origin (University)' },
+  { id: 2, x: 150, y: 150, status: 'on', address: 'Sport Complex Area' },
+  { id: 3, x: -200, y: -100, status: 'broken', address: 'Technopark Area' },
+  { id: 4, x: 300, y: 50, status: 'off', address: 'Residential Area East' },
+  { id: 5, x: 50, y: 300, status: 'on', address: 'Campus North' },
 ];
 
 const getColor = (status) => {
@@ -17,6 +33,21 @@ const getColor = (status) => {
     case 'broken': return 'red';
     default: return 'blue';
   }
+};
+
+// Component to fix map rendering issues
+const MapUpdater = () => {
+  const map = useMap();
+  
+  useEffect(() => {
+    // Invalidate size after a short delay to ensure container is ready
+    const timer = setTimeout(() => {
+      map.invalidateSize();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [map]);
+
+  return null;
 };
 
 const CityMap = () => {
@@ -87,25 +118,36 @@ const CityMap = () => {
   };
 
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '10px', background: '#f0f0f0', textAlign: 'center' }}>
-        <h2>City Street Lights Map</h2>
-        <p>WebSocket Status: <span style={{ color: wsStatus === 'Connected' ? 'green' : 'red', fontWeight: 'bold' }}>{wsStatus}</span></p>
-        <p>Click on a lamp to cycle its state (Off → On → Broken → Off)</p>
+    <div style={{ height: '100%', width: '100%', position: 'relative' }}>
+      <div style={{ 
+        position: 'absolute', 
+        top: '10px', 
+        right: '10px', 
+        zIndex: 1000, 
+        background: 'rgba(255, 255, 255, 0.8)', 
+        padding: '5px 10px', 
+        borderRadius: '5px',
+        fontSize: '12px'
+      }}>
+        <span style={{color: 'black'}}>WS:</span> <span style={{ color: wsStatus === 'Connected' ? 'green' : 'red', fontWeight: 'bold' }}>{wsStatus}</span>
       </div>
       
-      <div style={{ flex: 1 }}>
-        <MapContainer center={[55.751244, 37.618423]} zoom={15} style={{ height: '100%', width: '100%' }}>
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-          {lamps.map(lamp => (
+      <MapContainer center={[55.752317, 48.744578]} zoom={15} style={{ height: '100%', width: '100%' }}>
+        <MapUpdater />
+        <TileLayer
+          attribution='&copy; <a href="https://carto.com/attributions">CARTO</a>'
+          url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+          subdomains="abcd"
+          maxZoom={19}
+        />
+        {lamps.map(lamp => {
+          const [lat, lng] = localToGlobal(lamp.x, lamp.y);
+          return (
             <CircleMarker 
               key={lamp.id} 
-              center={[lamp.lat, lamp.lng]}
-              pathOptions={{ color: getColor(lamp.status), fillColor: getColor(lamp.status), fillOpacity: 0.7 }}
-              radius={10}
+              center={[lat, lng]}
+              pathOptions={{ color: getColor(lamp.status), fillColor: getColor(lamp.status), fillOpacity: 0.8 }}
+              radius={12}
               eventHandlers={{
                 click: () => toggleLampStatus(lamp.id),
               }}
@@ -113,12 +155,13 @@ const CityMap = () => {
               <Popup>
                 <strong>Lamp ID: {lamp.id}</strong><br />
                 Address: {lamp.address}<br />
-                Status: {lamp.status}
+                Status: {lamp.status}<br />
+                Local Pos: ({lamp.x}, {lamp.y})
               </Popup>
             </CircleMarker>
-          ))}
-        </MapContainer>
-      </div>
+          );
+        })}
+      </MapContainer>
     </div>
   );
 };
