@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css'; // CRITICAL: Required for Leaflet styles
 import L from 'leaflet';
+import WeatherCalendar from './WeatherCalendar';
 
 const ORIGIN_LAT = 55.752317;
 const ORIGIN_LNG = 48.744578;
@@ -125,7 +126,8 @@ const MapUpdater = () => {
 
 const CityMap = () => {
   const [lamps, setLamps] = useState([]);
-  const [wsStatus, setWsStatus] = useState('Подключение...');
+  const [wsStatus, setWsStatus] = useState('Отключено');
+  const [isBadWeather, setIsBadWeather] = useState(false); // New state for weather
   const ws = useRef(null);
   const reconnectTimeout = useRef(null);
   const connectWebSocketRef = useRef(null);
@@ -405,6 +407,7 @@ const CityMap = () => {
 
   const startDroneMission = useCallback(() => {
     if (droneStatus !== 'idle') return;
+    if (isBadWeather) return; // Drone cannot fly in bad weather
     const brokenLamps = lamps.filter(l => l.state <= 0.33);
     if (brokenLamps.length === 0) return;
 
@@ -418,14 +421,15 @@ const CityMap = () => {
     setCurrentTargetIndex(0);
     setDronePos({ lat: DRONEPORT_LAT, lng: DRONEPORT_LNG });
     setDroneStatus('toLamp');
-  }, [droneStatus, lamps]);
+  }, [droneStatus, lamps, isBadWeather]);
 
   useEffect(() => {
     if (droneStatus !== 'idle') return;
+    if (isBadWeather) return; // Do not auto-start in bad weather
     if (!lamps.some(l => l.state <= 0.33)) return;
     const timeout = setTimeout(() => startDroneMission(), 0);
     return () => clearTimeout(timeout);
-  }, [lamps, droneStatus, startDroneMission]);
+  }, [lamps, droneStatus, startDroneMission, isBadWeather]);
 
   return (
     <div style={{ height: '100vh', width: '100%', position: 'relative', fontFamily: 'sans-serif', color: '#333' }}>
@@ -439,6 +443,8 @@ const CityMap = () => {
         alignItems: 'flex-end',
         gap: '8px'
       }}>
+        <WeatherCalendar onTodayWeatherChange={setIsBadWeather} />
+
         <div style={{
           background: 'white', 
           padding: '8px 12px', 

@@ -24,3 +24,64 @@ html, body, #root {
 .leaflet-control-attribution {
   display: none;
 }
+
+/* Weather Calendar */
+.weather-calendar {
+  background: rgba(30, 30, 30, 0.9);
+  padding: 10px;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+  width: 220px;
+  color: #fff;
+  pointer-events: auto; /* Ensure clicks work */
+}
+
+.weather-calendar h3 {
+  margin: 0 0 10px 0;
+  font-size: 16px;
+  text-align: center;
+  border-bottom: 1px solid #444;
+  padding-bottom: 5px;
+}
+
+.calendar-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.calendar-day {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: help;
+  transition: transform 0.1s;
+}
+
+.calendar-day:hover {
+  transform: scale(1.02);
+}
+
+.calendar-day.bad {
+  background: rgba(231, 76, 60, 0.2);
+  border: 1px solid #e74c3c;
+}
+
+.calendar-day.good {
+  background: rgba(46, 204, 113, 0.2);
+  border: 1px solid #2ecc71;
+}
+
+.calendar-day .date {
+  font-weight: bold;
+}
+
+.calendar-day .temp {
+  color: #ccc;
+  font-size: 12px;
+}

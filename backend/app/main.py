@@ -3,6 +3,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, delete, select
@@ -14,6 +15,7 @@ from app.database import create_db, engine, get_session
 from app.models import Lamp, LampEvent, LampStatus, Streetlight
 from app.polling import polling_loop, schedule_repair_delay
 from app.ws import WSManager
+from app.weather import get_weather_forecast, is_weather_bad_today
 
 
 def _lamp_ws_status(lamp: Lamp) -> str:
@@ -202,6 +204,23 @@ def get_lamp_events(lamp_id: int, session: Session = Depends(get_session)):
         }
         for e in events
     ]
+
+
+# ── Weather API ──────────────────────────────────────────
+
+@app.get("/api/weather/forecast")
+async def get_forecast():
+    """Получить прогноз погоды на 7 дней."""
+    async with httpx.AsyncClient() as client:
+        return await get_weather_forecast(client)
+
+@app.get("/api/weather/today")
+async def get_today_weather():
+    """Узнать, плохая ли погода сегодня."""
+    async with httpx.AsyncClient() as client:
+        is_bad = await is_weather_bad_today(client)
+        return {"is_bad_weather": is_bad}
+
 
 
 # ── WebSocket ────────────────────────────────────────────
