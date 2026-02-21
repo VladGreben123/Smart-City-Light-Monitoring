@@ -1,8 +1,9 @@
 import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 
@@ -107,6 +108,7 @@ def get_lamps(session: Session = Depends(get_session)):
                 "lamp_id": lamp.id,
                 "status": lamp.status.value,
                 "is_on": lamp.is_on,
+                "failure_probability": lamp.failure_probability,
                 "voltage": lamp.voltage,
                 "current_ma": lamp.current_ma,
                 "power_w": lamp.power_w,
@@ -127,7 +129,6 @@ def get_lamps(session: Session = Depends(get_session)):
 def get_lamp(lamp_id: int, session: Session = Depends(get_session)):
     lamp = session.get(Lamp, lamp_id)
     if not lamp:
-        from fastapi import HTTPException
         raise HTTPException(404, "Lamp not found")
     sl = session.get(Streetlight, lamp.streetlight_id)
     return {
@@ -139,6 +140,7 @@ def get_lamp(lamp_id: int, session: Session = Depends(get_session)):
         "address": sl.address,
         "status": lamp.status.value,
         "is_on": lamp.is_on,
+        "failure_probability": lamp.failure_probability,
         "voltage": lamp.voltage,
         "current_ma": lamp.current_ma,
         "power_w": lamp.power_w,
@@ -175,11 +177,64 @@ def get_lamp_events(lamp_id: int, session: Session = Depends(get_session)):
 
 # ── WebSocket ────────────────────────────────────────────
 
-@app.websocket("/ws/lamps")
-async def ws_lamps(ws: WebSocket):
+@app.websocket("/ws")
+async def ws_endpoint(ws: WebSocket):
     await ws_manager.connect(ws)
+    logger.info("WebSocket client connected")
+
+    # Отправить начальное состояние всех ламп
+    with Session(engine) as session:
+        lamps = session.exec(select(Lamp)).all()
+        init_data = [
+            {
+                "id": lamp.id,
+                "is_on": lamp.is_on,
+                "failure_probability": round(lamp.failure_probability, 4),
+            }
+            for lamp in lamps
+        ]
+    await ws.send_text(json.dumps(
+        {"type": "init", "lamps": init_data},
+        ensure_ascii=False,
+        default=str,
+    ))
+
     try:
         while True:
-            await ws.receive_text()  # keep-alive
+            raw = await ws.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            lamp_id = msg.get("id")
+            if lamp_id is None:
+                continue
+
+            # Обработка команд от фронта (toggle is_on)
+            with Session(engine) as session:
+                lamp = session.get(Lamp, lamp_id)
+                if not lamp:
+                    continue
+
+                if "is_on" in msg:
+                    lamp.is_on = bool(msg["is_on"])
+                    session.commit()
+
+                    await ws_manager.broadcast(
+                        {
+                            "type": "update",
+                            "lamps": [{
+                                "id": lamp.id,
+                                "is_on": lamp.is_on,
+                                "failure_probability": round(
+                                    lamp.failure_probability, 4
+                                ),
+                            }],
+                        },
+                        exclude=ws,
+                    )
+
     except WebSocketDisconnect:
         ws_manager.disconnect(ws)
+        logger.info("WebSocket client disconnected")

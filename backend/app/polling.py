@@ -3,6 +3,7 @@ import json
 import logging
 from datetime import datetime
 
+import httpx
 from sqlmodel import Session, select
 
 from app.config import settings
@@ -17,6 +18,28 @@ STATUS_MAP = {
     LampStatusCode.OK: LampStatus.OK,
     LampStatusCode.BURNED_OUT: LampStatus.BURNED_OUT,
 }
+
+
+async def _get_failure_probability(client: httpx.AsyncClient, lamp: Lamp) -> float:
+    """Запросить вероятность отказа у AI-сервиса."""
+    try:
+        resp = await client.post(
+            f"{settings.AI_SERVICE_URL}/predict",
+            json={
+                "hours_active": lamp.hours_active,
+                "on_off_cycles": lamp.on_off_cycles,
+                "avg_temp_exposure": lamp.ambient_temp,
+                "temp_fluctuations": int(abs(lamp.junction_temp_avg - lamp.ambient_temp)),
+                "voltage_spikes": lamp.voltage_spike_count,
+                "humidity_exposure": lamp.humidity_avg,
+            },
+            timeout=2.0,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("failure_probability", 0.0)
+    except Exception:
+        logger.debug("AI service unavailable, using fallback")
+    return lamp.failure_probability  # оставить прежнее значение
 
 
 async def polling_loop(
@@ -51,85 +74,79 @@ async def _poll_once(
 
         updates: list[dict] = []
 
-        for sl in streetlights:
-            lamp = session.exec(
-                select(Lamp).where(Lamp.streetlight_id == sl.id)
-            ).first()
-            if lamp is None:
-                continue
+        async with httpx.AsyncClient() as http_client:
+            for sl in streetlights:
+                lamp = session.exec(
+                    select(Lamp).where(Lamp.streetlight_id == sl.id)
+                ).first()
+                if lamp is None:
+                    continue
 
-            try:
-                data = await controller.read_lamp_data(sl.modbus_slave_id)
-            except Exception:
-                logger.warning(
-                    "Failed to read slave_id=%d (%s)",
+                try:
+                    data = await controller.read_lamp_data(sl.modbus_slave_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to read slave_id=%d (%s)",
+                        sl.modbus_slave_id,
+                        sl.name,
+                    )
+                    continue
+
+                old_status = lamp.status
+                new_status = STATUS_MAP.get(data.status, LampStatus.OK)
+
+                lamp.status = new_status
+                lamp.is_on = data.is_on
+                lamp.hours_active = data.hours_active
+                lamp.junction_temp_avg = data.junction_temp_avg
+                lamp.voltage_spike_count = data.voltage_spike_count
+                lamp.on_off_cycles = data.on_off_cycles
+                lamp.humidity_avg = data.humidity_avg
+                lamp.voltage = data.voltage
+                lamp.current_ma = data.current_ma
+                lamp.power_w = round(data.voltage * data.current_ma / 1000.0, 2)
+                lamp.ambient_temp = data.ambient_temp
+                lamp.reflector_position = data.reflector_position
+                lamp.last_seen = datetime.utcnow()
+                lamp.updated_at = datetime.utcnow()
+
+                # Запрос вероятности отказа от AI
+                lamp.failure_probability = await _get_failure_probability(
+                    http_client, lamp
+                )
+
+                # Запись события при смене статуса
+                if old_status != new_status:
+                    event = LampEvent(
+                        lamp_id=lamp.id,
+                        event_type="status_change",
+                        details=json.dumps({
+                            "from": old_status.value,
+                            "to": new_status.value,
+                        }),
+                    )
+                    session.add(event)
+                    logger.info(
+                        "Lamp %d status: %s -> %s",
+                        lamp.id,
+                        old_status.value,
+                        new_status.value,
+                    )
+
+                logger.debug(
+                    "Polled slave_id=%d is_on=%s fp=%.2f",
                     sl.modbus_slave_id,
-                    sl.name,
-                )
-                continue
-
-            old_status = lamp.status
-            new_status = STATUS_MAP.get(data.status, LampStatus.OK)
-
-            lamp.status = new_status
-            lamp.is_on = data.is_on
-            lamp.hours_active = data.hours_active
-            lamp.junction_temp_avg = data.junction_temp_avg
-            lamp.voltage_spike_count = data.voltage_spike_count
-            lamp.on_off_cycles = data.on_off_cycles
-            lamp.humidity_avg = data.humidity_avg
-            lamp.voltage = data.voltage
-            lamp.current_ma = data.current_ma
-            lamp.power_w = round(data.voltage * data.current_ma / 1000.0, 2)
-            lamp.ambient_temp = data.ambient_temp
-            lamp.reflector_position = data.reflector_position
-            lamp.last_seen = datetime.utcnow()
-            lamp.updated_at = datetime.utcnow()
-
-            # Запись события при смене статуса
-            if old_status != new_status:
-                event = LampEvent(
-                    lamp_id=lamp.id,
-                    event_type="status_change",
-                    details=json.dumps({
-                        "from": old_status.value,
-                        "to": new_status.value,
-                    }),
-                )
-                session.add(event)
-                logger.info(
-                    "Lamp %d status: %s -> %s",
-                    lamp.id,
-                    old_status.value,
-                    new_status.value,
+                    data.is_on,
+                    lamp.failure_probability,
                 )
 
-            logger.debug(
-                "Polled slave_id=%d status=%s temp=%.1f voltage=%.1f",
-                sl.modbus_slave_id,
-                new_status.value,
-                data.junction_temp_avg,
-                data.voltage,
-            )
-
-            updates.append({
-                "streetlight_id": sl.id,
-                "lamp_id": lamp.id,
-                "name": sl.name,
-                "latitude": sl.latitude,
-                "longitude": sl.longitude,
-                "status": new_status.value,
-                "is_on": data.is_on,
-                "voltage": data.voltage,
-                "current_ma": data.current_ma,
-                "junction_temp_avg": data.junction_temp_avg,
-                "ambient_temp": data.ambient_temp,
-                "humidity_avg": data.humidity_avg,
-                "hours_active": data.hours_active,
-                "reflector_position": data.reflector_position,
-            })
+                updates.append({
+                    "id": lamp.id,
+                    "is_on": lamp.is_on,
+                    "failure_probability": round(lamp.failure_probability, 4),
+                })
 
         session.commit()
 
     if updates:
-        await ws_manager.broadcast({"type": "lamp_update", "lamps": updates})
+        await ws_manager.broadcast({"type": "update", "lamps": updates})

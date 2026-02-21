@@ -13,12 +13,15 @@ class WSManager:
         self._connections.append(ws)
 
     def disconnect(self, ws: WebSocket) -> None:
-        self._connections.remove(ws)
+        if ws in self._connections:
+            self._connections.remove(ws)
 
-    async def broadcast(self, data: dict) -> None:
+    async def broadcast(self, data: dict, exclude: WebSocket | None = None) -> None:
         message = json.dumps(data, ensure_ascii=False, default=str)
         dead: list[WebSocket] = []
         for ws in self._connections:
+            if ws is exclude:
+                continue
             try:
                 await ws.send_text(message)
             except Exception:

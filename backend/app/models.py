@@ -72,6 +72,7 @@ class Lamp(SQLModel, table=True):
     power_w: float = 0.0                     # мощность (Вт)
     ambient_temp: float = 0.0                # температура окружающей среды (°C)
     reflector_position: int = 0              # позиция отражателя (0 = закрыт)
+    failure_probability: float = 0.0         # вероятность отказа (0-1) от AI
 
     last_seen: Optional[datetime] = None
     updated_at: datetime = Field(default_factory=datetime.utcnow)
