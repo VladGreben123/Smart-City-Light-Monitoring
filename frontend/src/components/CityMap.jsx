@@ -5,25 +5,13 @@ import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaf
 const ORIGIN_LAT = 55.752317;
 const ORIGIN_LNG = 48.744578;
 
-// Convert local metric coordinates (x, y) to global (lat, lng)
-const localToGlobal = (x, y) => {
-  // Approximate conversion for short distances
-  const METERS_PER_DEGREE_LAT = 111320;
-  const METERS_PER_DEGREE_LNG = 40075000 * Math.cos((ORIGIN_LAT * Math.PI) / 180) / 360;
-
-  const lat = ORIGIN_LAT + (y / METERS_PER_DEGREE_LAT);
-  const lng = ORIGIN_LNG + (x / METERS_PER_DEGREE_LNG);
-  
-  return [lat, lng];
-};
-
 // Mock initial data for lamps (Local coordinates in meters relative to Origin)
 const initialLamps = [
-  { id: 1, x: 7, y: 7, status: 'off', address: 'Origin (University)' },
-  { id: 2, x: 150, y: 150, status: 'on', address: 'Sport Complex Area' },
-  { id: 3, x: -200, y: -100, status: 'broken', address: 'Technopark Area' },
-  { id: 4, x: 300, y: 50, status: 'off', address: 'Residential Area East' },
-  { id: 5, x: 50, y: 300, status: 'on', address: 'Campus North' },
+  { id: 1, lat: 55.752317, lng: 48.744578, status: 'off', address: 'Origin (University)' },
+  { id: 2, lat: 55.753817, lng: 48.746578, status: 'on', address: 'Sport Complex Area' },
+  { id: 3, lat: 55.751817, lng: 48.742578, status: 'broken', address: 'Technopark Area' },
+  { id: 4, lat: 55.754817, lng: 48.746578, status: 'off', address: 'Residential Area East' },
+  { id: 5, lat: 55.753317, lng: 48.745578, status: 'on', address: 'Campus North' },
 ];
 
 const getColor = (status) => {
@@ -141,7 +129,7 @@ const CityMap = () => {
           maxZoom={19}
         />
         {lamps.map(lamp => {
-          const [lat, lng] = localToGlobal(lamp.x, lamp.y);
+          const [lat, lng] = [lamp.lat, lamp.lng];
           return (
             <CircleMarker 
               key={lamp.id} 
