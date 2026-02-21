@@ -9,28 +9,27 @@ const DRONEPORT_LAT = 55.7528;
 const DRONEPORT_LNG = 48.7452;
 
 const initialLamps = [
-  { id: 1, lat: 55.752317, lng: 48.744578, status: 'off', state:0.20 , address: 'Origin (University)' },
+  { id: 1, lat: 55.752317, lng: 48.744578, status: 'off', state:0.90 , address: 'Origin (University)' },
   { id: 2, lat: 55.753817, lng: 48.746578, status: 'on', state:0.20 , address: 'Sport Complex Area' },
   { id: 3, lat: 55.751817, lng: 48.742578, status: 'off', state:0.20, address: 'Technopark Area' },
-  { id: 4, lat: 55.754817, lng: 48.746578, status: 'off', state:0.20, address: 'Residential Area East' },
+  { id: 4, lat: 55.754817, lng: 48.746578, status: 'off', state:0.90, address: 'Residential Area East' },
   { id: 5, lat: 55.753317, lng: 48.745578, status: 'on', state:0.20, address: 'Campus North' },
 ];
 
-const getColor = (status) => {
+const getBorderColor = (status) => {
   switch (status) {
-    case 'on': return '#2ecc71';   // Green
-    case 'off': return '#95a5a6';  // Gray
-    case 'broken': return '#e74c3c'; // Red
+    case 'on': return '#2ecc71';
+    case 'off': return '#95a5a6';
+    case 'broken': return '#e74c3c';
+    default: return '#bdc3c7';
   }
 };
 
-// const getColor = (state) => {
-//   switch (state) {
-//     case state < 0.33: return '#2ecc71';   // Green
-//     case state < 0.66: return '#e4f312ff';  // Gray
-//     case state >= 0.66: return '#e74c3c'; // Red
-//   }
-// }
+const getColor = (stat) => {
+  if (stat < 0.33) return '#e74c3c';
+  if (stat < 0.66) return '#e4f312';
+  return '#2ecc71';
+};
 
 const getLabel = (status) => {
   switch (status) {
@@ -178,6 +177,19 @@ const CityMap = () => {
   }, [currentTargetIndex]);
 
   useEffect(() => {
+    const interval = setInterval(() => {
+      setLamps(prev =>
+        prev.map(l => {
+          const next = l.state - 0.01;
+          return { ...l, state: next < 0 ? 0 : next };
+        })
+      );
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
     if (droneStatus !== 'toLamp' && droneStatus !== 'return') return;
     if (dronePath.length === 0) return;
 
@@ -232,16 +244,18 @@ const CityMap = () => {
           const idx = targetIndexRef.current;
           const lampId = path[idx];
 
+          const repairedState = 1;
+
           setLamps(prev =>
             prev.map(l =>
-              l.id === lampId && l.status === 'broken'
-                ? { ...l, status: 'off' }
+              l.id === lampId
+                ? { ...l, state: repairedState }
                 : l
             )
           );
 
           if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-            const message = JSON.stringify({ id: lampId, status: 'off' });
+            const message = JSON.stringify({ id: lampId, state: repairedState });
             ws.current.send(message);
           }
 
@@ -278,10 +292,7 @@ const CityMap = () => {
     const lamp = lamps.find(l => l.id === id);
     if (!lamp) return;
 
-    let newStatus = 'off';
-    if (lamp.status === 'off') newStatus = 'on';
-    else if (lamp.status === 'on') newStatus = 'broken';
-    else newStatus = 'off';
+    const newStatus = lamp.status === 'off' ? 'on' : 'off';
 
     setLamps(prevLamps => 
       prevLamps.map(l => l.id === id ? { ...l, status: newStatus } : l)
@@ -298,7 +309,7 @@ const CityMap = () => {
 
   const startDroneMission = () => {
     if (droneStatus !== 'idle') return;
-    const brokenLamps = lamps.filter(l => l.status === 'broken');
+    const brokenLamps = lamps.filter(l => l.state <= 0.33);
     if (brokenLamps.length === 0) return;
 
     const pathIds = brokenLamps.map(l => l.id);
@@ -307,6 +318,12 @@ const CityMap = () => {
     setDronePos({ lat: DRONEPORT_LAT, lng: DRONEPORT_LNG });
     setDroneStatus('toLamp');
   };
+
+  useEffect(() => {
+    if (droneStatus !== 'idle') return;
+    if (!lamps.some(l => l.state <= 0.33)) return;
+    startDroneMission();
+  }, [lamps, droneStatus]);
 
   return (
     <div style={{ height: '100vh', width: '100%', position: 'relative', fontFamily: 'sans-serif', color: '#333' }}>
@@ -350,12 +367,12 @@ const CityMap = () => {
         <div>Дрон: {droneStatus === 'idle' ? 'ожидает' : droneStatus === 'toLamp' ? 'обслуживает лампы' : 'возвращается'}</div>
         <button 
           onClick={startDroneMission}
-          disabled={droneStatus !== 'idle' || !lamps.some(l => l.status === 'broken')}
+          disabled={droneStatus !== 'idle' || !lamps.some(l => l.state <= 0.33)}
           style={{
             padding: '6px 10px',
             borderRadius: '6px',
             border: 'none',
-            background: droneStatus === 'idle' && lamps.some(l => l.status === 'broken') ? '#3498db' : '#bdc3c7',
+            background: droneStatus === 'idle' && lamps.some(l => l.state <= 0.33) ? '#3498db' : '#bdc3c7',
             color: 'white',
             cursor: droneStatus === 'idle' && lamps.some(l => l.status === 'broken') ? 'pointer' : 'default',
             fontSize: '13px'
@@ -419,10 +436,8 @@ const CityMap = () => {
             key={lamp.id} 
             center={[lamp.lat, lamp.lng]}
             pathOptions={{ 
-              color: getColor(lamp.status), 
-              fillColor: getColor(lamp.status), 
-              // border: getBorder(lamp.status),
-              // borderRadius: 2,
+              color: getBorderColor(lamp.status), 
+              fillColor: getColor(lamp.state), 
               fillOpacity: 1,
               weight: 2
             }}
@@ -442,10 +457,13 @@ const CityMap = () => {
                 <h4 style={{ margin: '0 0 5px' }}>Lamp #{lamp.id}</h4>
                 <p style={{ margin: '2px 0', fontSize: '13px', color: '#555' }}>{lamp.address}</p>
                 <p style={{ margin: '2px 0', fontSize: '13px' }}>
-                  Status: <strong style={{ color: getColor(lamp.state) }}>{getLabel(lamp.status)}</strong>
+                  Status: <strong style={{ color: getBorderColor(lamp.status) }}>{getLabel(lamp.status)}</strong>
+                </p>
+                <p style={{ margin: '2px 0', fontSize: '13px' }}>
+                  Health: <strong style={{ color: getColor(lamp.state) }}>{lamp.state.toFixed(2)}</strong>
                 </p>
                 <p style={{ margin: '5px 0 0', fontSize: '11px', color: '#888' }}>
-                  Click to toggle state
+                  Click to toggle power
                 </p>
               </div>
             </Popup>
