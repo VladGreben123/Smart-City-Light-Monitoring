@@ -7,6 +7,7 @@ from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, delete, select
 
+from app.config import settings
 from app.controller import get_controller
 from app.controller.base import LampStatusCode
 from app.database import create_db, engine, get_session
@@ -17,8 +18,8 @@ from app.ws import WSManager
 
 def _lamp_ws_status(lamp: Lamp) -> str:
     """Маппинг внутреннего статуса лампы в формат фронтенда."""
-    if lamp.status in (LampStatus.BURNED_OUT, LampStatus.ABSENT, LampStatus.MAINTENANCE):
-        return "broken"
+    # Всегда возвращаем on/off в зависимости от времени суток (is_on)
+    # Состояние "broken" определяется через state (failure_probability)
     return "on" if lamp.is_on else "off"
 
 logging.basicConfig(
@@ -62,12 +63,12 @@ app.add_middleware(
 
 def _generate_lamp_positions() -> list[tuple[str, float, float, str]]:
     """Генерация позиций ламп."""
-    ORIGIN_LAT = 55.752317
-    ORIGIN_LNG = 48.744578
+    ORIGIN_LAT = settings.CITY_LAT
+    ORIGIN_LNG = settings.CITY_LNG
 
     lamps: list[tuple[str, float, float, str]] = []
 
-    for i in range(30):
+    for i in range(settings.LAMP_COUNT):
         lamps.append((
             f"Universitetskaya St #{i+1}",
             ORIGIN_LAT - i * 0.00035,
@@ -83,7 +84,7 @@ def _seed_demo_data() -> None:
     with Session(engine) as session:
         streetlights = session.exec(select(Streetlight)).all()
         lamps = session.exec(select(Lamp)).all()
-        if len(streetlights) == 30 and len(lamps) == 30:
+        if len(streetlights) == settings.LAMP_COUNT and len(lamps) == settings.LAMP_COUNT:
             return
 
         if streetlights or lamps:
@@ -211,6 +212,7 @@ async def ws_endpoint(ws: WebSocket):
     logger.info("WebSocket client connected")
 
     # Отправить начальное состояние каждой лампы отдельным сообщением
+    # Оптимизация: используем один запрос с join
     with Session(engine) as session:
         results = session.exec(
             select(Streetlight, Lamp).join(Lamp, isouter=True)
@@ -243,8 +245,9 @@ async def ws_endpoint(ws: WebSocket):
             new_status = msg.get("status")
             new_state = msg.get("state")
 
-            # Обработка сообщения от дрона: {id, state} (без status)
-            if new_state is not None and new_status is None:
+            # Обработка сообщения от дрона: {id, state} (ремонт)
+            if new_state is not None:
+                # Оптимизация: открываем сессию один раз
                 with Session(engine) as session:
                     lamp = session.get(Lamp, lamp_id)
                     if not lamp:
@@ -270,6 +273,8 @@ async def ws_endpoint(ws: WebSocket):
                     )
                     session.add(event)
                     session.commit()
+                    # Важно: refresh не нужен, если мы не используем объект дальше, но для чистоты
+                    session.refresh(lamp) 
 
                     await ws_manager.broadcast(
                         {
@@ -280,32 +285,6 @@ async def ws_endpoint(ws: WebSocket):
                         exclude=ws,
                     )
                 continue
-
-            if new_status != "broken":
-                continue
-
-            with Session(engine) as session:
-                lamp = session.get(Lamp, lamp_id)
-                if not lamp:
-                    continue
-
-                sl = session.get(Streetlight, lamp.streetlight_id)
-                controller = app.state.controller
-
-                lamp.status = LampStatus.BURNED_OUT
-                lamp.is_on = False
-                await controller.set_status(sl.modbus_slave_id, LampStatusCode.BURNED_OUT)
-                session.commit()
-
-                # Отправить обновление всем остальным клиентам
-                await ws_manager.broadcast(
-                    {
-                        "id": lamp.id,
-                        "status": _lamp_ws_status(lamp),
-                        "state": round(1.0 - lamp.failure_probability, 4),
-                    },
-                    exclude=ws,
-                )
 
     except WebSocketDisconnect:
         ws_manager.disconnect(ws)

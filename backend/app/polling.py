@@ -87,29 +87,30 @@ async def _poll_once(
     ws_manager: WSManager,
 ) -> None:
     with Session(engine) as session:
-        streetlights = session.exec(
-            select(Streetlight).where(Streetlight.is_active == True)
+        # Оптимизация: загружаем Streetlight сразу вместе с Lamp, чтобы избежать N+1
+        # Используем join для эффективности
+        results = session.exec(
+            select(Streetlight, Lamp).join(Lamp, isouter=True).where(Streetlight.is_active == True)
         ).all()
 
         updates: list[dict] = []
 
-        async with httpx.AsyncClient() as http_client:
+        # Используем контекстный менеджер для клиента, чтобы переиспользовать соединение
+        async with httpx.AsyncClient(timeout=5.0) as http_client:
             dark = await is_dark_now(http_client)
 
-            for sl in streetlights:
-                lamp = session.exec(
-                    select(Lamp).where(Lamp.streetlight_id == sl.id)
-                ).first()
+            for sl, lamp in results:
                 if lamp is None:
                     continue
 
                 try:
                     data = await controller.read_lamp_data(sl.modbus_slave_id)
-                except Exception:
+                except Exception as e:
                     logger.warning(
-                        "Failed to read slave_id=%d (%s)",
+                        "Failed to read slave_id=%d (%s): %s",
                         sl.modbus_slave_id,
                         sl.name,
+                        str(e)
                     )
                     continue
 
@@ -153,10 +154,11 @@ async def _poll_once(
                                 sl.modbus_slave_id,
                                 sl.name,
                             )
-                        except Exception:
+                        except Exception as e:
                             logger.warning(
-                                "Failed to switch lamp slave_id=%d",
+                                "Failed to switch lamp slave_id=%d: %s",
                                 sl.modbus_slave_id,
+                                str(e)
                             )
 
                 # Запрос вероятности отказа от AI
