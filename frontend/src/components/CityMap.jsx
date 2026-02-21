@@ -19,7 +19,7 @@ const localToGlobal = (x, y) => {
 
 // Mock initial data for lamps (Local coordinates in meters relative to Origin)
 const initialLamps = [
-  { id: 1, x: 0, y: 0, status: 'off', address: 'Origin (University)' },
+  { id: 1, x: 7, y: 7, status: 'off', address: 'Origin (University)' },
   { id: 2, x: 150, y: 150, status: 'on', address: 'Sport Complex Area' },
   { id: 3, x: -200, y: -100, status: 'broken', address: 'Technopark Area' },
   { id: 4, x: 300, y: 50, status: 'off', address: 'Residential Area East' },
@@ -146,8 +146,8 @@ const CityMap = () => {
             <CircleMarker 
               key={lamp.id} 
               center={[lat, lng]}
-              pathOptions={{ color: getColor(lamp.status), fillColor: getColor(lamp.status), fillOpacity: 0.8 }}
-              radius={12}
+              pathOptions={{ color: getColor(lamp.status), fillColor: getColor(lamp.status), fillOpacity: 1 }}
+              radius={7}
               eventHandlers={{
                 click: () => toggleLampStatus(lamp.id),
               }}
