@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>DB Schema — Smart Streetlight System</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1e1e2e;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    padding: 40px 20px;
+    color: #cdd6f4;
+  }
+  h1 {
+    text-align: center;
+    font-size: 26px;
+    margin-bottom: 10px;
+    color: #89b4fa;
+  }
+  .subtitle {
+    text-align: center;
+    color: #6c7086;
+    font-size: 13px;
+    margin-bottom: 30px;
+  }
+
+  /* ── Layout ── */
+  .schema {
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  .row {
+    display: flex;
+    justify-content: center;
+    gap: 60px;
+    margin-bottom: 16px;
+  }
+  .connector {
+    display: flex;
+    justify-content: center;
+    gap: 60px;
+    margin-bottom: 16px;
+  }
+  .conn-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 420px;
+  }
+  .conn-line {
+    width: 2px;
+    height: 30px;
+    background: #7f849c;
+  }
+  .conn-line-dashed {
+    width: 2px;
+    height: 30px;
+    background: repeating-linear-gradient(to bottom, #7f849c 0px, #7f849c 5px, transparent 5px, transparent 10px);
+  }
+  .conn-label {
+    color: #a6adc8;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 2px 10px;
+    background: #1e1e2e;
+    border: 1px solid #45475a;
+    border-radius: 12px;
+    margin: 4px 0;
+  }
+  .conn-horizontal {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin: 20px 0;
+    justify-content: center;
+  }
+  .conn-h-line {
+    height: 2px;
+    width: 60px;
+    background: #7f849c;
+  }
+  .conn-h-label {
+    color: #a6adc8;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 2px 10px;
+    background: #1e1e2e;
+    border: 1px solid #45475a;
+    border-radius: 12px;
+    white-space: nowrap;
+  }
+
+  /* ── Table card ── */
+  .table-card {
+    background: #313244;
+    border-radius: 12px;
+    border: 2px solid #45475a;
+    width: 420px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .table-card:hover { border-color: #89b4fa; }
+  .table-header {
+    padding: 10px 16px;
+    font-weight: 700;
+    font-size: 16px;
+    text-align: center;
+    letter-spacing: 0.5px;
+  }
+  .table-body { padding: 4px 0 6px; }
+  .field {
+    display: flex;
+    padding: 3px 16px;
+    font-size: 13px;
+    gap: 8px;
+    align-items: center;
+  }
+  .field:hover { background: #45475a; }
+  .field-key {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 4px;
+    min-width: 26px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .pk { background: #f9e2af; color: #1e1e2e; }
+  .fk { background: #a6e3a1; color: #1e1e2e; }
+  .spacer-key { visibility: hidden; }
+  .field-name { color: #cdd6f4; font-weight: 600; min-width: 160px; }
+  .field-type { color: #6c7086; font-size: 12px; min-width: 60px; text-align: right; }
+  .field-comment { color: #585b70; font-size: 11px; font-style: italic; margin-left: auto; }
+  .section-label {
+    padding: 3px 16px;
+    font-size: 10px;
+    color: #585b70;
+    border-top: 1px solid #45475a;
+    margin-top: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  /* Colors per table */
+  .t-streetlight .table-header { background: #89b4fa; color: #1e1e2e; }
+  .t-lamp .table-header { background: #f9e2af; color: #1e1e2e; }
+  .t-drone .table-header { background: #a6e3a1; color: #1e1e2e; }
+  .t-job .table-header { background: #f38ba8; color: #1e1e2e; }
+  .t-event .table-header { background: #cba6f7; color: #1e1e2e; }
+
+  /* ── Legend ── */
+  .legend {
+    margin: 30px auto 0;
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    font-size: 12px;
+    flex-wrap: wrap;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-color { width: 12px; height: 12px; border-radius: 3px; }
+
+  /* ── Bottom row with horizontal connectors ── */
+  .bottom-section {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 0;
+    margin-top: 16px;
+  }
+  .bottom-left {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .bottom-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding-top: 80px;
+  }
+  .bottom-right {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+</style>
+</head>
+<body>
+
+<h1>Smart Streetlight System — Database Schema</h1>
+<p class="subtitle">SQLite + SQLModel &nbsp;|&nbsp; 5 таблиц &nbsp;|&nbsp; FastAPI Backend</p>
+
+<!-- ═══════════ ROW 1: streetlights + drones ═══════════ -->
+<div class="schema">
+  <div class="row">
+
+    <!-- STREETLIGHTS -->
+    <div class="table-card t-streetlight">
+      <div class="table-header">streetlights</div>
+      <div class="table-body">
+        <div class="field"><span class="field-key pk">PK</span><span class="field-name">id</span><span class="field-type">int</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">name</span><span class="field-type">str</span><span class="field-comment">«СТ-001»</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">latitude</span><span class="field-type">float</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">longitude</span><span class="field-type">float</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">address</span><span class="field-type">str</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">modbus_slave_id</span><span class="field-type">int UQ</span><span class="field-comment">RS485 адрес</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">installed_at</span><span class="field-type">datetime</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">is_active</span><span class="field-type">bool</span></div>
+      </div>
+    </div>
+
+    <!-- DRONES -->
+    <div class="table-card t-drone">
+      <div class="table-header">drones</div>
+      <div class="table-body">
+        <div class="field"><span class="field-key pk">PK</span><span class="field-name">id</span><span class="field-type">int</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">name</span><span class="field-type">str</span><span class="field-comment">«Дрон-01»</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">model</span><span class="field-type">str</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">status</span><span class="field-type">enum</span><span class="field-comment">idle | in_flight | charging | maint | offline</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">battery_level</span><span class="field-type">float</span><span class="field-comment">%</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">latitude</span><span class="field-type">float?</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">longitude</span><span class="field-type">float?</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">total_flights</span><span class="field-type">int</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">total_replacements</span><span class="field-type">int</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">last_maintenance</span><span class="field-type">datetime?</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">created_at</span><span class="field-type">datetime</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══ CONNECTOR: streetlights → lamps (1:1) ═══ -->
+  <div class="connector">
+    <div class="conn-group">
+      <div class="conn-line-dashed"></div>
+      <span class="conn-label">1 : 1</span>
+      <div class="conn-line-dashed"></div>
+    </div>
+    <div class="conn-group" style="visibility: hidden;"></div>
+  </div>
+
+  <!-- ═══════════ ROW 2: lamps ═══════════ -->
+  <div class="row">
+    <!-- LAMPS -->
+    <div class="table-card t-lamp">
+      <div class="table-header">lamps</div>
+      <div class="table-body">
+        <div class="field"><span class="field-key pk">PK</span><span class="field-name">id</span><span class="field-type">int</span></div>
+        <div class="field"><span class="field-key fk">FK</span><span class="field-name">streetlight_id</span><span class="field-type">int UQ</span><span class="field-comment">→ streetlights.id</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">status</span><span class="field-type">enum</span><span class="field-comment">ok | burned_out | absent | maintenance</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">is_on</span><span class="field-type">bool</span></div>
+        <div class="section-label">показатели контроллера</div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">hours_active</span><span class="field-type">int</span><span class="field-comment">наработка (ч)</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">junction_temp_avg</span><span class="field-type">float</span><span class="field-comment">°C перехода</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">voltage_spike_count</span><span class="field-type">int</span><span class="field-comment">скачки напряжения</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">on_off_cycles</span><span class="field-type">int</span><span class="field-comment">циклы вкл/выкл</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">humidity_avg</span><span class="field-type">float</span><span class="field-comment">влажность %</span></div>
+        <div class="section-label">доп. показатели</div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">voltage</span><span class="field-type">float</span><span class="field-comment">В</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">current_ma</span><span class="field-type">float</span><span class="field-comment">мА</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">power_w</span><span class="field-type">float</span><span class="field-comment">Вт</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">ambient_temp</span><span class="field-type">float</span><span class="field-comment">°C среды</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">reflector_position</span><span class="field-type">int</span><span class="field-comment">градусы (0=закрыт)</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">last_seen</span><span class="field-type">datetime?</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">updated_at</span><span class="field-type">datetime</span></div>
+      </div>
+    </div>
+
+    <!-- placeholder for alignment -->
+    <div style="width: 420px;"></div>
+  </div>
+
+  <!-- ═══ CONNECTORS: lamps → events (1:*) + lamps → jobs (1:*) ═══ -->
+  <div class="connector">
+    <div class="conn-group" style="width: 200px;">
+      <div class="conn-line"></div>
+      <span class="conn-label">1 : *</span>
+      <div class="conn-line"></div>
+    </div>
+    <div class="conn-group" style="width: 80px;"></div>
+    <div class="conn-group" style="width: 200px;">
+      <div class="conn-line"></div>
+      <span class="conn-label">1 : *</span>
+      <div class="conn-line"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════ ROW 3: lamp_events + replacement_jobs ═══════════ -->
+  <div class="row">
+
+    <!-- LAMP_EVENTS -->
+    <div class="table-card t-event">
+      <div class="table-header">lamp_events</div>
+      <div class="table-body">
+        <div class="field"><span class="field-key pk">PK</span><span class="field-name">id</span><span class="field-type">int</span></div>
+        <div class="field"><span class="field-key fk">FK</span><span class="field-name">lamp_id</span><span class="field-type">int</span><span class="field-comment">→ lamps.id</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">event_type</span><span class="field-type">str</span><span class="field-comment">status_change | replaced | spike | overheat</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">details</span><span class="field-type">str?</span><span class="field-comment">JSON подробности</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">created_at</span><span class="field-type">datetime</span></div>
+      </div>
+    </div>
+
+    <!-- REPLACEMENT_JOBS -->
+    <div class="table-card t-job">
+      <div class="table-header">replacement_jobs</div>
+      <div class="table-body">
+        <div class="field"><span class="field-key pk">PK</span><span class="field-name">id</span><span class="field-type">int</span></div>
+        <div class="field"><span class="field-key fk">FK</span><span class="field-name">lamp_id</span><span class="field-type">int</span><span class="field-comment">→ lamps.id</span></div>
+        <div class="field"><span class="field-key fk">FK</span><span class="field-name">drone_id</span><span class="field-type">int?</span><span class="field-comment">→ drones.id</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">status</span><span class="field-type">enum</span><span class="field-comment">pending | assigned | in_progress | completed | failed</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">priority</span><span class="field-type">int</span><span class="field-comment">1=высокий, 5=низкий</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">created_at</span><span class="field-type">datetime</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">assigned_at</span><span class="field-type">datetime?</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">started_at</span><span class="field-type">datetime?</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">completed_at</span><span class="field-type">datetime?</span></div>
+        <div class="field"><span class="field-key spacer-key">--</span><span class="field-name">failure_reason</span><span class="field-type">str?</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══ Note about drones → jobs ═══ -->
+  <div style="text-align: center; margin: 20px 0; color: #6c7086; font-size: 13px;">
+    <span style="color: #a6e3a1; font-weight: 700;">drones</span>.id
+    &nbsp;←──&nbsp;
+    <span class="conn-label" style="display: inline;">1 : *</span>
+    &nbsp;──→&nbsp;
+    <span style="color: #f38ba8; font-weight: 700;">replacement_jobs</span>.drone_id
+  </div>
+
+  <!-- ═══ LEGEND ═══ -->
+  <div class="legend">
+    <div class="legend-item"><span class="legend-color" style="background:#f9e2af"></span> PK — Primary Key</div>
+    <div class="legend-item"><span class="legend-color" style="background:#a6e3a1"></span> FK — Foreign Key</div>
+    <div class="legend-item"><span class="legend-color" style="background:#89b4fa"></span> streetlights</div>
+    <div class="legend-item"><span class="legend-color" style="background:#f9e2af; border:1px solid #f9e2af"></span> lamps</div>
+    <div class="legend-item"><span class="legend-color" style="background:#a6e3a1"></span> drones</div>
+    <div class="legend-item"><span class="legend-color" style="background:#f38ba8"></span> replacement_jobs</div>
+    <div class="legend-item"><span class="legend-color" style="background:#cba6f7"></span> lamp_events</div>
+  </div>
+
+</div>
+
+</body>
+</html>
