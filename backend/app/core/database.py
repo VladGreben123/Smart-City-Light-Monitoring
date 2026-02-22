@@ -1,6 +1,6 @@
 from sqlmodel import SQLModel, Session, create_engine  # type: ignore
 
-from app.config import settings
+from app.core.config import settings
 
 DATABASE_URL = settings.DATABASE_URL
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})

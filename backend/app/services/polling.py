@@ -6,11 +6,12 @@ from datetime import datetime, timedelta
 import httpx
 from sqlmodel import Session, select
 
-from app.config import settings
+from app.core.config import settings
 from app.controller.base import BaseController, LampStatusCode
-from app.daylight import is_dark_now
+from app.core.database import Session
 from app.models import Lamp, LampEvent, LampStatus, Streetlight
-from app.ws import WSManager
+from app.services.websocket import WSManager
+from app.services.daylight import is_dark_now
 
 logger = logging.getLogger("polling")
 

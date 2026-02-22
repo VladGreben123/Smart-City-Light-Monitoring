@@ -13,5 +13,17 @@ class Settings:
     CITY_LAT: float = float(os.getenv("CITY_LAT", "55.752"))
     CITY_LNG: float = float(os.getenv("CITY_LNG", "48.745"))
 
+    # API Keys
+    YANDEX_WEATHER_API_KEY: str | None = os.getenv("YANDEX_WEATHER_API_KEY")
+
+    def __init__(self):
+        # Load from .env file if available and not set in env
+        if not self.YANDEX_WEATHER_API_KEY:
+            try:
+                from dotenv import load_dotenv
+                load_dotenv(override=True)
+                self.YANDEX_WEATHER_API_KEY = os.getenv("YANDEX_WEATHER_API_KEY")
+            except ImportError:
+                pass
 
 settings = Settings()
