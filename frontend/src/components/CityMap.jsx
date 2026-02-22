@@ -145,6 +145,8 @@ const CityMap = () => {
   
   // Track manually broken lamps for testing (IDs)
   const brokenLampIdsRef = useRef(new Set());
+  // Track recently repaired lamps to prevent race conditions
+  const recentlyRepairedLampIdsRef = useRef(new Set());
   const [randomFailureEnabled, setRandomFailureEnabled] = useState(false);
   const failureProbability = 0.3;
   const checkInterval = 5000;
@@ -201,7 +203,9 @@ const CityMap = () => {
                 lng: data.lng ?? prev?.lng ?? ORIGIN_LNG,
                 address: data.address ?? prev?.address ?? '',
                 status: data.status ? mapStatusFromApi(data.status, data.is_on ?? (prev?.status === 'on')) : (prev?.status ?? 'off'),
-                state: brokenLampIdsRef.current.has(data.id) ? 0.0 : (typeof data.state === 'number' ? data.state : (prev?.state ?? 1))
+                state: brokenLampIdsRef.current.has(data.id) ? 0.0 : 
+                       (recentlyRepairedLampIdsRef.current.has(data.id) ? 1.0 :
+                       (typeof data.state === 'number' ? data.state : (prev?.state ?? 1)))
               };
 
               if (index === -1) {
@@ -353,10 +357,17 @@ const CityMap = () => {
           // Simulate repair locally
           if (brokenLampIdsRef.current.has(lampId)) {
             brokenLampIdsRef.current.delete(lampId);
-            setLamps(prev => prev.map(l => 
-              l.id === lampId ? { ...l, state: 1.0 } : l
-            ));
           }
+          
+          // Mark as recently repaired to ignore stale backend updates
+          recentlyRepairedLampIdsRef.current.add(lampId);
+          setTimeout(() => {
+            recentlyRepairedLampIdsRef.current.delete(lampId);
+          }, 10000);
+
+          setLamps(prev => prev.map(l => 
+            l.id === lampId ? { ...l, state: 1.0 } : l
+          ));
 
           if (ws.current && ws.current.readyState === WebSocket.OPEN) {
             const message = JSON.stringify({ id: lampId, state: 1 });

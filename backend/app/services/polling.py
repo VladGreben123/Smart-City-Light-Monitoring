@@ -21,7 +21,7 @@ STATUS_MAP = {
     LampStatusCode.BURNED_OUT: LampStatus.BURNED_OUT,
 }
 
-REPAIR_ON_DELAY_SECONDS = 3
+REPAIR_ON_DELAY_SECONDS = 0.5
 _repair_delay_until: dict[int, datetime] = {}
 
 
@@ -39,7 +39,7 @@ def is_in_repair_delay(lamp_id: int) -> bool:
     return True
 
 
-async def _get_failure_probability(client: httpx.AsyncClient, lamp: Lamp) -> float:
+async def _get_failure_probability(client: httpx.AsyncClient, lamp: Lamp) -> float | None:
     """Запросить вероятность отказа у AI-сервиса."""
     # TODO: Временно отключено, так как сервис AI не запущен (вызывает 502 Bad Gateway)
     # try:
@@ -59,7 +59,7 @@ async def _get_failure_probability(client: httpx.AsyncClient, lamp: Lamp) -> flo
     #         return resp.json().get("failure_probability", 0.0)
     # except Exception:
     #     logger.debug("AI service unavailable, using fallback")
-    return lamp.failure_probability  # оставить прежнее значение
+    return None  # AI недоступен, используем fallback логику
 
 
 async def polling_loop(
@@ -76,6 +76,10 @@ async def polling_loop(
 
     while True:
         try:
+            # Симуляция хаоса (если это мок-контроллер)
+            if hasattr(controller, "simulate_chaos"):
+                controller.simulate_chaos()
+                
             await _poll_once(controller, engine, ws_manager)
         except Exception:
             logger.exception("Polling cycle error")
@@ -133,6 +137,8 @@ async def _poll_once(
                 lamp.updated_at = datetime.utcnow()
                 if lamp.status in (LampStatus.BURNED_OUT, LampStatus.ABSENT, LampStatus.MAINTENANCE):
                     # lamp.is_on = False # User requested state depends ONLY on time
+                    if lamp.status == LampStatus.BURNED_OUT:
+                        lamp.failure_probability = 1.0
                     pass
 
                 should_be_on = lamp.is_on
@@ -163,9 +169,15 @@ async def _poll_once(
                             )
 
                 # Запрос вероятности отказа от AI
-                lamp.failure_probability = await _get_failure_probability(
-                    http_client, lamp
-                )
+                fp = await _get_failure_probability(http_client, lamp)
+                if fp is not None:
+                    lamp.failure_probability = fp
+                else:
+                    # Fallback логика:
+                    # Если лампа исправна, но вероятность поломки все еще 1.0 (например, после ремонта или stale data),
+                    # сбрасываем ее в 0.0
+                    if lamp.status == LampStatus.OK and lamp.failure_probability >= 0.99:
+                        lamp.failure_probability = 0.0
 
                 # Запись события при смене статуса
                 if old_status != new_status:
