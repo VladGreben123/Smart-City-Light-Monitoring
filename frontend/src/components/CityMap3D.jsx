@@ -24,7 +24,7 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
         // maplibregl is imported, so we can use static method
         const modelAsMercatorCoordinate = maplibregl.MercatorCoordinate.fromLngLat(
             [droneStatus.lng, droneStatus.lat],
-            100 // Altitude in meters
+            50 // Altitude in meters
         );
         
         // Update ref regardless of map/model state
@@ -52,12 +52,12 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                 this.camera = new THREE.Camera();
                 this.scene = new THREE.Scene();
 
-                // Lights
-                const ambientLight = new THREE.AmbientLight(0xffffff, 0.25);
+                // Add Lights
+                const ambientLight = new THREE.AmbientLight(0xffffff, 2.0); // Soft white light
                 this.scene.add(ambientLight);
-                
-                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.4);
-                directionalLight.position.set(0, 10, 10).normalize();
+
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 2.0);
+                directionalLight.position.set(0, 10, 10); // Top-right-front
                 this.scene.add(directionalLight);
 
                 // Load Model
@@ -65,6 +65,18 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
 
                 loader.load(absoluteModelUrl, (gltf) => {
                     const model = gltf.scene;
+                    
+                    // Model Validation Logs
+                    console.log("Drone Model Loaded:", model);
+                    model.traverse((child) => {
+                        if (child.isMesh) {
+                            console.log("Mesh Found:", child.name);
+                            console.log("Material:", child.material);
+                            if (child.material.map) console.log("Has Texture Map");
+                            else console.log("No Texture Map");
+                            console.log("Color:", child.material.color);
+                        }
+                    });
 
                     droneModelRef.current = model;
                     this.scene.add(model);
@@ -81,8 +93,6 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                     context: gl,
                     antialias: true
                 });
-                this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-                this.renderer.toneMappingExposure = 0.5;
                 this.renderer.autoClear = false;
             },
             render: function (gl, matrix) {
@@ -97,7 +107,7 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                     const rotateZ = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0, 0, 1), 0);
 
                     // Scale factor - adjust based on model size
-                    const scale = position.meterInMercatorCoordinateUnits() * 30; 
+                    const scale = position.meterInMercatorCoordinateUnits() * 15; 
 
                     const transform = new THREE.Matrix4()
                         .makeTranslation(position.x, position.y, position.z)
@@ -119,6 +129,119 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
         if (!map.getLayer('3d-model')) {
              map.addLayer(customLayer);
         }
+
+        // Apply dark theme overrides to the Liberty style
+        const darkenMapStyle = () => {
+            const style = map.getStyle();
+            if (!style || !style.layers) return;
+
+            // 1. Force background color immediately
+            if (map.getLayer('background')) {
+                map.setPaintProperty('background', 'background-color', '#1a1a1a');
+            } else {
+                // If no background layer, try to add one or set container background
+                // but usually Liberty has 'background'
+            }
+
+            // 2. Iterate all layers
+            style.layers.forEach(layer => {
+                const id = layer.id.toLowerCase();
+                const type = layer.type;
+
+                // --- LAND / GROUND ---
+                // Catch-all for land-related layers (landuse, landcover, park, grass, nature, etc.)
+                if (
+                    id.includes('land') || 
+                    id.includes('park') || 
+                    id.includes('grass') || 
+                    id.includes('wood') || 
+                    id.includes('garden') || 
+                    id.includes('nature') ||
+                    id.includes('pitch') ||
+                    id.includes('sand') ||
+                    id.includes('wetland') ||
+                    id.includes('scrub') ||
+                    id.includes('glacier') ||
+                    id.includes('earth') ||
+                    id.includes('pedestrian') ||
+                    id.includes('square')
+                ) {
+                    if (type === 'fill') {
+                        // Dark Green for vegetation
+                        if (id.includes('grass') || id.includes('park') || id.includes('wood') || id.includes('garden') || id.includes('nature')) {
+                            map.setPaintProperty(layer.id, 'fill-color', '#1e331e'); 
+                        } 
+                        // Dark Grey for other land/pavement
+                        else {
+                            map.setPaintProperty(layer.id, 'fill-color', '#222222'); 
+                        }
+                    }
+                }
+
+                // --- WATER ---
+                if (id.includes('water') || id.includes('ocean') || id.includes('lake') || id.includes('river')) {
+                    if (type === 'fill') {
+                        map.setPaintProperty(layer.id, 'fill-color', '#0d1b2a');
+                    }
+                }
+
+                // --- ROADS ---
+                if (id.includes('road') || id.includes('highway') || id.includes('transport') || id.includes('street') || id.includes('tunnel') || id.includes('bridge')) {
+                    if (type === 'line') {
+                        map.setPaintProperty(layer.id, 'line-color', '#333333');
+                    } else if (type === 'fill') {
+                        map.setPaintProperty(layer.id, 'fill-color', '#2b2b2b');
+                    }
+                }
+
+                // --- BUILDINGS ---
+                // 2D footprints - make them dark
+                if (id.includes('building')) {
+                    if (type === 'fill') {
+                         map.setPaintProperty(layer.id, 'fill-color', '#2a2a2a');
+                         map.setPaintProperty(layer.id, 'fill-opacity', 0.5);
+                    }
+                }
+
+                // --- TEXT / LABELS ---
+                if (type === 'symbol') {
+                    // Try to lighten text, darken halos
+                    if (layer.layout && layer.layout['text-field']) {
+                         try {
+                            map.setPaintProperty(layer.id, 'text-halo-color', '#000000');
+                            map.setPaintProperty(layer.id, 'text-halo-width', 1);
+                            map.setPaintProperty(layer.id, 'text-color', '#cccccc');
+                         } catch (e) {
+                             // Ignore errors
+                         }
+                    }
+                }
+            });
+        };
+
+        // Listen for ANY style data change (load, update, etc.)
+        // Use 'styledata' to catch when the style is fully applied
+        map.on('styledata', () => {
+             // We need to be careful not to trigger infinite loops if we change style props that trigger styledata
+             // setPaintProperty usually triggers 'styledata'.
+             // So we should check if it's already dark? Or just run it once per major load?
+             // Actually, setPaintProperty triggers 'styledata', so this WILL loop if we are not careful.
+             // But maplibregl might optimize it if value hasn't changed.
+             
+             // Safer approach: Run it once on 'load', and then maybe on 'style.load'.
+             // The user reported "white ground", meaning my previous 'style.load' was maybe too early or missed.
+             // Let's try 'idle' which fires when map is fully rendered.
+        });
+
+        // Use 'idle' event to ensure everything is rendered, then apply colors.
+        // This might cause a flash of light content, but it ensures it gets applied.
+        map.on('load', darkenMapStyle);
+        map.on('style.load', darkenMapStyle);
+        
+        // Also run immediately if ready
+        if (map.isStyleLoaded()) {
+            darkenMapStyle();
+        }
     };
 
     useEffect(() => {
@@ -132,11 +255,6 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
             }
             .maplibregl-ctrl-attrib a {
                 color: #fff !important;
-            }
-
-            /* Custom Map Dark Mode Filter */
-            .maplibregl-canvas {
-                filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(1.2) saturate(1.35) !important;
             }
 
             /* Zoom Controls - Match CityMap.jsx design */
@@ -239,7 +357,7 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
         type: 'fill-extrusion',
         minzoom: 14,
         paint: {
-            'fill-extrusion-color': '#aaa', // Revert to lighter color as filter will invert it to dark
+            'fill-extrusion-color': '#444444',
             'fill-extrusion-height': [
                 'interpolate', ['linear'], ['zoom'],
                 14, 0,
@@ -250,7 +368,7 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                 14, 0,
                 14.05, ['get', 'render_min_height']
             ],
-            'fill-extrusion-opacity': 0.8
+            'fill-extrusion-opacity': 0.9
         }
     };
 
