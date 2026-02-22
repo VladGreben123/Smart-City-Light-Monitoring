@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 from sqlmodel import Session, select
 import json
 import logging
@@ -8,7 +9,7 @@ from app.core.database import get_session, engine
 from app.models import Lamp, LampEvent, LampStatus, Streetlight
 from app.controller.base import LampStatusCode
 from app.services.websocket import ws_manager
-from app.services.weather import get_weather_forecast, is_weather_bad_today
+from app.services.weather import get_weather_forecast, is_weather_bad_today, set_weather_override, get_weather_override
 from app.services.polling import schedule_repair_delay
 
 logger = logging.getLogger("api")
@@ -123,6 +124,22 @@ async def get_today_weather():
     async with httpx.AsyncClient() as client:
         is_bad = await is_weather_bad_today(client)
         return {"is_bad_weather": is_bad}
+
+
+# ── Debug / Weather override ─────────────────────────────
+
+class WeatherOverrideRequest(BaseModel):
+    enabled: bool
+    is_bad: bool = False
+
+@router.post("/debug/weather-override")
+async def weather_override(body: WeatherOverrideRequest):
+    set_weather_override(body.enabled, body.is_bad)
+    return {"ok": True, "enabled": body.enabled, "is_bad": body.is_bad}
+
+@router.get("/debug/weather-override")
+async def weather_override_status():
+    return get_weather_override()
 
 
 # ── WebSocket ────────────────────────────────────────────

@@ -14,12 +14,38 @@ logger = logging.getLogger("weather")
 _cache: dict[str, dict] = {}
 _cache_timestamp: datetime | None = None
 
+# Override для тестирования
+_override_enabled: bool = False
+_override_is_bad: bool = False
+
+def set_weather_override(enabled: bool, is_bad: bool = False) -> None:
+    global _override_enabled, _override_is_bad
+    _override_enabled = enabled
+    _override_is_bad = is_bad
+
+def get_weather_override() -> dict:
+    return {"enabled": _override_enabled, "is_bad": _override_is_bad}
+
 async def get_weather_forecast(client: httpx.AsyncClient) -> list[dict]:
     """
     Получить прогноз погоды на 7 дней.
     Возвращает список дней с флагом плохой погоды.
     """
     global _cache_timestamp
+
+    if _override_enabled:
+        result = []
+        for i in range(7):
+            date_str = (datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d")
+            result.append({
+                "date": date_str,
+                "is_bad_weather": _override_is_bad,
+                "reason": "Тестовый режим: плохая погода" if _override_is_bad else "Тестовый режим: хорошая погода",
+                "weather_code": 0,
+                "temp_min": -5 if _override_is_bad else 15,
+                "wind_max": 20 if _override_is_bad else 3,
+            })
+        return result
 
     if settings.YANDEX_WEATHER_API_KEY:
         try:
