@@ -1,9 +1,10 @@
+import json
+import logging
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from sqlmodel import Session, select
-import json
-import logging
-import httpx
 
 from app.core.config import settings
 from app.core.database import get_session, engine

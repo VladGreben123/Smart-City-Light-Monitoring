@@ -10,7 +10,7 @@ const RoutePanel = ({ brokenCount, minToFly = 3, routeData, droneStatus }) => {
     return (
         <div style={{
             position: 'absolute',
-            bottom: '20px',
+            top: '20px',
             left: '10px',
             zIndex: 1000,
             background: 'white',

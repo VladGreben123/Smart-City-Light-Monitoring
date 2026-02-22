@@ -103,6 +103,9 @@ async def _poll_once(
         # Используем контекстный менеджер для клиента, чтобы переиспользовать соединение
         async with httpx.AsyncClient(timeout=5.0) as http_client:
             dark = await is_dark_now(http_client)
+            if dark is None:
+                hour = datetime.now().hour
+                dark = hour >= 20 or hour < 6
 
             for sl, lamp in results:
                 if lamp is None:
@@ -141,32 +144,28 @@ async def _poll_once(
                         lamp.failure_probability = 1.0
                     pass
 
-                should_be_on = lamp.is_on
-                if dark is not None:
-                    should_be_on = dark
-                    # if lamp.status in (LampStatus.BURNED_OUT, LampStatus.ABSENT, LampStatus.MAINTENANCE):
-                    #     should_be_on = False
-                    if is_in_repair_delay(lamp.id):
-                        should_be_on = False
+                should_be_on = dark
+                if is_in_repair_delay(lamp.id):
+                    should_be_on = False
 
-                    if lamp.is_on != should_be_on:
-                        try:
-                            await controller.write_lamp_on(
-                                sl.modbus_slave_id, should_be_on
-                            )
-                            lamp.is_on = should_be_on
-                            logger.info(
-                                "Daylight control: %s lamp slave_id=%d (%s)",
-                                "ON" if should_be_on else "OFF",
-                                sl.modbus_slave_id,
-                                sl.name,
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                "Failed to switch lamp slave_id=%d: %s",
-                                sl.modbus_slave_id,
-                                str(e)
-                            )
+                if lamp.is_on != should_be_on:
+                    try:
+                        await controller.write_lamp_on(
+                            sl.modbus_slave_id, should_be_on
+                        )
+                        lamp.is_on = should_be_on
+                        logger.info(
+                            "Daylight control: %s lamp slave_id=%d (%s)",
+                            "ON" if should_be_on else "OFF",
+                            sl.modbus_slave_id,
+                            sl.name,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to switch lamp slave_id=%d: %s",
+                            sl.modbus_slave_id,
+                            str(e)
+                        )
 
                 # Запрос вероятности отказа от AI
                 fp = await _get_failure_probability(http_client, lamp)

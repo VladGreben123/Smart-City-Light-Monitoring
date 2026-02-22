@@ -64,10 +64,6 @@ const WeatherCalendar = ({ onTodayWeatherChange }) => {
     if (loading) return null;
     if (error) return <div className="weather-calendar" style={{color: 'red'}}>{error}</div>;
 
-    const today = new Date();
-    const currentMonth = today.toLocaleString('ru-RU', { month: 'long' });
-    const capitalizedMonth = currentMonth.charAt(0).toUpperCase() + currentMonth.slice(1);
-
     if (!isExpanded) {
         const todayData = forecast[0] || {};
         const isBad = todayData.is_bad_weather;

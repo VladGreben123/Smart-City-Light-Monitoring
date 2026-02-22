@@ -1,51 +1,130 @@
-import React, { useRef, useEffect, useState } from 'react';
-import Map, { Source, Layer, Marker, NavigationControl } from 'react-map-gl/maplibre';
+import React, { useRef, useEffect } from 'react';
+import Map, { Source, Layer, NavigationControl, Marker } from 'react-map-gl/maplibre';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import droneModelUrl from '../assets/drone.glb?url';
 
 const ORIGIN_LAT = 55.752317;
 const ORIGIN_LNG = 48.744578;
+const DRONEPORT_LAT = 55.7528;
+const DRONEPORT_LNG = 48.7452;
 
 const CityMap3D = ({ lamps, droneStatus, path }) => {
     const mapRef = useRef(null);
-    const [mapStyle, setMapStyle] = useState(null);
+    const droneModelRef = useRef(null); // Reference to the THREE.Group or Scene of the drone
+    const dronePositionRef = useRef(null);
 
-    // Load base style and inject drone model definition
+    // Update drone position when droneStatus changes
     useEffect(() => {
-        fetch("https://tiles.openfreemap.org/styles/liberty")
-            .then(res => res.json())
-            .then(style => {
-                // Ensure absolute URL for the model
-                const absoluteModelUrl = new URL(droneModelUrl, window.location.origin).href;
-                console.log("Drone Model URL:", absoluteModelUrl);
+        if (!droneStatus) return;
 
-                // Add model definition to the style spec
-                style.models = {
-                    "drone-model": absoluteModelUrl
-                };
-                
-                // Add ambient light if not present (MapLibre v5 style uses 'lights' array or 'light' object for global)
-                // For v5, we might need to add a sky layer or just rely on default.
-                // Let's try adding a simple ambient light configuration if possible.
-                // Actually, let's just make sure the model URL is correct first.
-                
-                setMapStyle(style);
-            })
-            .catch(err => console.error("Failed to load map style", err));
-    }, []);
+        // Calculate position in Mercator coordinates
+        // maplibregl is imported, so we can use static method
+        const modelAsMercatorCoordinate = maplibregl.MercatorCoordinate.fromLngLat(
+            [droneStatus.lng, droneStatus.lat],
+            100 // Altitude in meters
+        );
+        
+        // Update ref regardless of map/model state
+        dronePositionRef.current = modelAsMercatorCoordinate;
+
+        // Trigger repaint if map is ready
+        if (mapRef.current) {
+            const map = mapRef.current.getMap();
+            if (map) map.triggerRepaint();
+        }
+
+    }, [droneStatus]);
 
     const onMapLoad = (e) => {
-        // No need to add model manually if it's in the style
+        const map = e.target;
+        
+        const absoluteModelUrl = new URL(droneModelUrl, window.location.origin).href;
+
+        // Create Custom Layer
+        const customLayer = {
+            id: '3d-model',
+            type: 'custom',
+            renderingMode: '3d',
+            onAdd: function (map, gl) {
+                this.camera = new THREE.Camera();
+                this.scene = new THREE.Scene();
+
+                // Lights
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.25);
+                this.scene.add(ambientLight);
+                
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.4);
+                directionalLight.position.set(0, 10, 10).normalize();
+                this.scene.add(directionalLight);
+
+                // Load Model
+                const loader = new GLTFLoader();
+
+                loader.load(absoluteModelUrl, (gltf) => {
+                    const model = gltf.scene;
+
+                    droneModelRef.current = model;
+                    this.scene.add(model);
+                    map.triggerRepaint();
+                }, undefined, (error) => {
+                    console.error("Error loading drone model:", error);
+                });
+
+                this.map = map;
+                
+                // Use the map's canvas and context
+                this.renderer = new THREE.WebGLRenderer({
+                    canvas: map.getCanvas(),
+                    context: gl,
+                    antialias: true
+                });
+                this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+                this.renderer.toneMappingExposure = 0.5;
+                this.renderer.autoClear = false;
+            },
+            render: function (gl, matrix) {
+                const position = dronePositionRef.current;
+                
+                if (position && droneModelRef.current) {
+                    const m = new THREE.Matrix4().fromArray(matrix);
+                    
+                    // Rotate model to stand up (if Z-up model)
+                    const rotateX = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+                    const rotateY = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0, 1, 0), 0);
+                    const rotateZ = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0, 0, 1), 0);
+
+                    // Scale factor - adjust based on model size
+                    const scale = position.meterInMercatorCoordinateUnits() * 30; 
+
+                    const transform = new THREE.Matrix4()
+                        .makeTranslation(position.x, position.y, position.z)
+                        .scale(new THREE.Vector3(scale, -scale, scale))
+                        .multiply(rotateX)
+                        .multiply(rotateY)
+                        .multiply(rotateZ);
+
+                    this.camera.projectionMatrix = m.multiply(transform);
+                    
+                    this.renderer.resetState();
+                    this.renderer.render(this.scene, this.camera);
+                }
+                
+                this.map.triggerRepaint();
+            }
+        };
+
+        if (!map.getLayer('3d-model')) {
+             map.addLayer(customLayer);
+        }
     };
 
     useEffect(() => {
         // Inject styles to filter only the map canvas, not the markers/controls
         const style = document.createElement('style');
         style.innerHTML = `
-            .maplibregl-canvas {
-                filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
-            }
             /* Ensure attribution is readable */
             .maplibregl-ctrl-attrib {
                 background: rgba(0,0,0,0.5) !important;
@@ -53,6 +132,11 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
             }
             .maplibregl-ctrl-attrib a {
                 color: #fff !important;
+            }
+
+            /* Custom Map Dark Mode Filter */
+            .maplibregl-canvas {
+                filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(1.2) saturate(1.35) !important;
             }
 
             /* Zoom Controls - Match CityMap.jsx design */
@@ -150,12 +234,12 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
     // ... rest of component
     const buildingLayer = {
         id: '3d-buildings',
-        source: 'openfreemap',
+        source: 'openmaptiles',
         'source-layer': 'building',
         type: 'fill-extrusion',
         minzoom: 14,
         paint: {
-            'fill-extrusion-color': '#aaa',
+            'fill-extrusion-color': '#aaa', // Revert to lighter color as filter will invert it to dark
             'fill-extrusion-height': [
                 'interpolate', ['linear'], ['zoom'],
                 14, 0,
@@ -194,15 +278,7 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
         }))
     };
 
-    const droneGeoJSON = droneStatus ? {
-        type: 'Feature',
-        geometry: {
-            type: 'Point',
-            coordinates: [droneStatus.lng, droneStatus.lat]
-        }
-    } : null;
-
-    if (!mapStyle) return <div style={{color:'white'}}>Loading Map Style...</div>;
+    if (!droneModelUrl) console.error("Drone model URL missing!");
 
     return (
         <Map
@@ -215,7 +291,7 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                 bearing: -20 // Slight rotation
             }}
             style={{width: '100%', height: '100vh'}}
-            mapStyle={mapStyle}
+            mapStyle="https://tiles.openfreemap.org/styles/liberty"
             mapLib={maplibregl}
             ref={mapRef}
             attributionControl={false}
@@ -223,14 +299,8 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
         >
             <NavigationControl position="bottom-left" showCompass={false} />
             
-            {/* 3D Buildings Layer - Explicitly added if not in style */}
-            {/* Note: OpenFreeMap liberty style usually includes buildings but maybe not extruded. 
-                Let's add a custom layer for 3D buildings if needed.
-                However, for simplicity, let's trust the style first or add a simple fill-extrusion layer.
-            */}
-             <Source id="openfreemap" type="vector" url="https://tiles.openfreemap.org/planet">
-                <Layer {...buildingLayer} />
-            </Source>
+            {/* 3D Buildings Layer - Use existing source from style */}
+            <Layer {...buildingLayer} />
 
             {/* Lamp Circles */}
             <Source id="lamps" type="geojson" data={lampsGeoJSON}>
@@ -267,43 +337,34 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                     }}
                 />
             </Source>
+            
+            {/* Droneport Marker */}
+            <Marker longitude={DRONEPORT_LNG} latitude={DRONEPORT_LAT} anchor="center">
+                <div className="droneport-marker">
+                    <div className="droneport-base">
+                        <div className="droneport-pad"></div>
+                        <div className="droneport-beacon"></div>
+                    </div>
+                </div>
+            </Marker>
 
-            {/* Drone 3D Model */}
+            {/* Drone Positioning Shadow/Marker */}
             {droneStatus && (
-                <Source id="drone" type="geojson" data={droneGeoJSON}>
-                    <Layer
-                        id="drone-model-layer"
-                        type="model"
-                        layout={{
-                            'model-id': 'drone-model'
-                        }}
-                        paint={{
-                            'model-scale': [100, 100, 100],
-                            'model-rotation': [0, 0, -45],
-                            'model-translation': [0, 0, 100],
-                            'model-opacity': 1,
-                        }}
-                    />
-                </Source>
+                <Marker longitude={droneStatus.lng} latitude={droneStatus.lat} anchor="center">
+                     <div className="drone-marker">
+                        <div className="drone-arm arm-1"></div>
+                        <div className="drone-arm arm-2"></div>
+                        <div className="drone-body"></div>
+                        <div className="drone-prop tl"></div>
+                        <div className="drone-prop tr"></div>
+                        <div className="drone-prop bl"></div>
+                        <div className="drone-prop br"></div>
+                    </div>
+                </Marker>
             )}
 
-            {/* Debug Circle - To verify position */}
-            {droneStatus && (
-                 <Source id="drone-debug" type="geojson" data={droneGeoJSON}>
-                    <Layer
-                        id="drone-debug-circle"
-                        type="circle"
-                        paint={{
-                            'circle-radius': 10,
-                            'circle-color': '#00ff00',
-                            'circle-opacity': 0.5,
-                            'circle-stroke-width': 2,
-                            'circle-stroke-color': '#fff'
-                        }}
-                    />
-                </Source>
-            )}
-
+            {/* Drone 3D Model handled by custom Three.js layer */}
+            
             {/* Fallback Marker - Removed as we expect model to work now */}
 
         </Map>

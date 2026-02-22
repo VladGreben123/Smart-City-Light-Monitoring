@@ -15,6 +15,10 @@
   height: 100%;
 }
 
+.leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(1.2) saturate(1.35);
+}
+
 .leaflet-control-attribution {
   background: rgba(255, 255, 255, 0.5) !important;
   font-size: 10px !important;
