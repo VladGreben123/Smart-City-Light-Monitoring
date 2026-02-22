@@ -40,26 +40,30 @@ def is_in_repair_delay(lamp_id: int) -> bool:
 
 
 async def _get_failure_probability(client: httpx.AsyncClient, lamp: Lamp) -> float | None:
-    """Запросить вероятность отказа у AI-сервиса."""
-    # TODO: Временно отключено, так как сервис AI не запущен (вызывает 502 Bad Gateway)
-    # try:
-    #     resp = await client.post(
-    #         f"{settings.AI_SERVICE_URL}/predict",
-    #         json={
-    #             "hours_active": lamp.hours_active,
-    #             "on_off_cycles": lamp.on_off_cycles,
-    #             "avg_temp_exposure": lamp.ambient_temp,
-    #             "temp_fluctuations": int(abs(lamp.junction_temp_avg - lamp.ambient_temp)),
-    #             "voltage_spikes": lamp.voltage_spike_count,
-    #             "humidity_exposure": lamp.humidity_avg,
-    #         },
-    #         timeout=2.0,
-    #     )
-    #     if resp.status_code == 200:
-    #         return resp.json().get("failure_probability", 0.0)
-    # except Exception:
-    #     logger.debug("AI service unavailable, using fallback")
-    return None  # AI недоступен, используем fallback логику
+    """Запросить вероятность отказа у AI-сервиса (IT-Tupolev_2026-ai 2, port 8001)."""
+    try:
+        age_years = round(lamp.hours_active / 8760, 2) if lamp.hours_active else 0.0
+        power_w = int(lamp.power_w) if lamp.power_w else 100
+        resp = await client.post(
+            f"{settings.AI_PREDICT_URL}/predict",
+            json={
+                "power_watts": power_w,
+                "quality_tier": "Standard",
+                "age_years": age_years,
+                "operating_hours": lamp.hours_active,
+                "switching_cycles": lamp.on_off_cycles,
+                "voltage_spike_count": lamp.voltage_spike_count,
+                "avg_humidity": lamp.humidity_avg,
+                "avg_temperature": lamp.ambient_temp,
+                "previous_repairs": 0,
+            },
+            timeout=2.0,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("failure_probability", 0.0)
+    except Exception:
+        logger.debug("AI predict service unavailable, using fallback")
+    return None
 
 
 async def polling_loop(
@@ -76,10 +80,6 @@ async def polling_loop(
 
     while True:
         try:
-            # Симуляция хаоса (если это мок-контроллер)
-            if hasattr(controller, "simulate_chaos"):
-                controller.simulate_chaos()
-                
             await _poll_once(controller, engine, ws_manager)
         except Exception:
             logger.exception("Polling cycle error")

@@ -4,6 +4,7 @@ import 'leaflet/dist/leaflet.css'; // CRITICAL: Required for Leaflet styles
 import L from 'leaflet';
 import WeatherCalendar from './WeatherCalendar';
 import CityMap3D from './CityMap3D';
+import RoutePanel from './RoutePanel';
 
 const ORIGIN_LAT = 55.752317;
 const ORIGIN_LNG = 48.744578;
@@ -98,7 +99,7 @@ const getBorderColor = (status) => {
 };
 
 const getColor = (stat) => {
-  if (stat < 0.33) return '#e74c3c';
+  if (stat <= 0.34) return '#e74c3c';  // failure_probability >= 0.66 → нужна замена
   if (stat < 0.66) return '#e4f312';
   return '#2ecc71';
 };
@@ -145,8 +146,55 @@ const CityMap = () => {
   const waitUntilRef = useRef(null);
   const currentSpeedRef = useRef(0); // For smooth acceleration
   
+  // Track manually broken lamps for scenarios (IDs)
+  const brokenLampIdsRef = useRef(new Set());
   // Track recently repaired lamps to prevent race conditions
   const recentlyRepairedLampIdsRef = useRef(new Set());
+  const [routeData, setRouteData] = useState(null);
+  const [activeScenario, setActiveScenario] = useState(null);
+
+  const SCENARIOS = [
+    { id: 1, label: 'Сценарий 1', desc: '3 лампы', lampIds: [2, 8, 20], color: '#e67e22' },
+    { id: 2, label: 'Сценарий 2', desc: '5 ламп',  lampIds: [1, 6, 13, 21, 27], color: '#8e44ad' },
+    { id: 3, label: 'Сценарий 3', desc: '8 ламп',  lampIds: [3, 7, 11, 15, 18, 23, 26, 29], color: '#c0392b' },
+  ];
+
+  const resetAllLamps = async () => {
+    const prevBroken = [...brokenLampIdsRef.current];
+    brokenLampIdsRef.current.clear();
+    setLamps(prev => prev.map(l => ({ ...l, state: 1.0 })));
+    setActiveScenario(null);
+    if (prevBroken.length > 0) {
+      fetch('http://localhost:8000/api/lamps/scenario', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lamp_ids: prevBroken, action: 'reset' }),
+      }).catch(() => {});
+    }
+  };
+
+  const activateScenario = async (scenario) => {
+    const prevBroken = [...brokenLampIdsRef.current];
+    brokenLampIdsRef.current = new Set(scenario.lampIds);
+    const ids = new Set(scenario.lampIds);
+    setActiveScenario(scenario.id);
+    setLamps(prev => prev.map(l => ({
+      ...l,
+      state: ids.has(l.id) ? 0.0 : 1.0,
+    })));
+    if (prevBroken.length > 0) {
+      await fetch('http://localhost:8000/api/lamps/scenario', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lamp_ids: prevBroken, action: 'reset' }),
+      }).catch(() => {});
+    }
+    fetch('http://localhost:8000/api/lamps/scenario', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lamp_ids: scenario.lampIds, action: 'break' }),
+    }).catch(() => {});
+  };
 
   const connectWebSocket = useCallback(() => {
     // Clear existing timeout if any
@@ -175,8 +223,9 @@ const CityMap = () => {
                 lng: data.lng ?? prev?.lng ?? ORIGIN_LNG,
                 address: data.address ?? prev?.address ?? '',
                 status: data.status ? mapStatusFromApi(data.status, data.is_on ?? (prev?.status === 'on')) : (prev?.status ?? 'off'),
-                state: recentlyRepairedLampIdsRef.current.has(data.id) ? 1.0 :
-                       (typeof data.state === 'number' ? data.state : (prev?.state ?? 1))
+                state: brokenLampIdsRef.current.has(data.id) ? 0.0 :
+                       (recentlyRepairedLampIdsRef.current.has(data.id) ? 1.0 :
+                       (typeof data.state === 'number' ? data.state : (prev?.state ?? 1)))
               };
 
               if (index === -1) {
@@ -227,7 +276,11 @@ const CityMap = () => {
       .then(data => {
         const mapped = data
           .filter(item => item.lamp_id)
-          .map(mapLampFromApi);
+          .map(mapLampFromApi)
+          .map(l => {
+            if (brokenLampIdsRef.current.has(l.id)) l.state = 0.0;
+            return l;
+          });
         setLamps(mapped);
       })
       .catch(() => {});
@@ -321,6 +374,10 @@ const CityMap = () => {
           const idx = targetIndexRef.current;
           const lampId = path[idx];
           
+          // Simulate repair locally
+          if (brokenLampIdsRef.current.has(lampId)) {
+            brokenLampIdsRef.current.delete(lampId);
+          }
           // Mark as recently repaired to ignore stale backend updates
           recentlyRepairedLampIdsRef.current.add(lampId);
           setTimeout(() => {
@@ -378,29 +435,44 @@ const CityMap = () => {
     };
   }, [droneStatus, dronePath]);
 
-  const startDroneMission = useCallback(() => {
-    if (droneStatus !== 'idle') return;
-    if (isBadWeather) return; // Drone cannot fly in bad weather
-    const brokenLamps = lamps.filter(l => l.state <= 0.33);
-    if (brokenLamps.length === 0) return;
+  const MIN_BROKEN_TO_FLY = 3;
 
-    // Sort lamps by distance to optimize path (simple greedy)
-    // Actually, let's just keep it simple for now or random
-    // But sorting by distance from droneport then next closest would be better
-    // For now, let's just take them as is
-    
-    const pathIds = brokenLamps.map(l => l.id);
+  const startDroneMission = useCallback(async () => {
+    if (droneStatus !== 'idle') return;
+    if (isBadWeather) return;
+
+    const brokenLamps = lampsRef.current.filter(l => l.state <= 0.34);
+    if (brokenLamps.length < MIN_BROKEN_TO_FLY) return;
+
+    // Запрашиваем оптимальный маршрут ТОЛЬКО перед вылетом
+    let pathIds = brokenLamps.map(l => l.id);
+    try {
+      const resp = await fetch('http://localhost:8000/api/route/optimize', { method: 'POST' });
+      if (resp.ok) {
+        const data = await resp.json();
+        setRouteData(data);
+        if (data.route_ids?.length > 0) {
+          const brokenIdSet = new Set(brokenLamps.map(l => l.id));
+          const ordered = data.route_ids.map(Number).filter(id => brokenIdSet.has(id));
+          const remaining = brokenLamps.map(l => l.id).filter(id => !ordered.includes(id));
+          pathIds = [...ordered, ...remaining];
+        }
+      }
+    } catch (e) {
+      console.error('Route optimization failed, using default order', e);
+    }
+
     setDronePath(pathIds);
     setCurrentTargetIndex(0);
     setDronePos({ lat: DRONEPORT_LAT, lng: DRONEPORT_LNG });
     setDroneStatus('toLamp');
-  }, [droneStatus, lamps, isBadWeather]);
+  }, [droneStatus, isBadWeather]);
 
   useEffect(() => {
     if (droneStatus !== 'idle') return;
-    if (isBadWeather) return; // Do not auto-start in bad weather
-    if (!lamps.some(l => l.state <= 0.33)) return;
-    const timeout = setTimeout(() => startDroneMission(), 0);
+    if (isBadWeather) return;
+    if (lamps.filter(l => l.state <= 0.34).length < MIN_BROKEN_TO_FLY) return;
+    const timeout = setTimeout(() => startDroneMission(), 500);
     return () => clearTimeout(timeout);
   }, [lamps, droneStatus, startDroneMission, isBadWeather]);
 
@@ -524,7 +596,66 @@ const CityMap = () => {
           }}></span>
           <span style={{ letterSpacing: '0.3px' }}>{wsStatus}</span>
         </div>
+
+        <div style={{
+          background: '#2b2d30',
+          borderRadius: '12px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+          padding: '8px 10px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '5px',
+          minWidth: '150px',
+          border: '1px solid #3c3f41',
+        }}>
+          <div style={{ fontSize: '11px', fontWeight: '600', color: '#8f9298', marginBottom: '2px' }}>
+            🎬 Сценарии
+          </div>
+          {SCENARIOS.map(s => (
+            <button
+              key={s.id}
+              onClick={() => activateScenario(s)}
+              style={{
+                padding: '5px 10px',
+                background: activeScenario === s.id ? s.color : '#3c3f41',
+                color: '#f2f2f2',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: '500',
+                textAlign: 'left',
+                transition: 'all 0.2s',
+              }}
+            >
+              {s.label} <span style={{ opacity: 0.6, fontSize: '11px' }}>({s.desc})</span>
+            </button>
+          ))}
+          <button
+            onClick={resetAllLamps}
+            style={{
+              padding: '5px 10px',
+              background: activeScenario ? '#2ecc71' : '#3c3f41',
+              color: activeScenario ? 'white' : '#8f9298',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontSize: '11px',
+              marginTop: '2px',
+              transition: 'all 0.2s',
+            }}
+          >
+            ✓ Сбросить
+          </button>
+        </div>
       </div>
+
+      <RoutePanel
+        brokenCount={lamps.filter(l => l.state <= 0.34).length}
+        minToFly={MIN_BROKEN_TO_FLY}
+        routeData={routeData}
+        droneStatus={droneStatus}
+      />
 
       {is3D ? (
         <CityMap3D 
