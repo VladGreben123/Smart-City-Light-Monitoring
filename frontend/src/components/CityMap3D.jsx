@@ -2,26 +2,41 @@ import React, { useRef, useEffect, useState } from 'react';
 import Map, { Source, Layer, Marker, NavigationControl } from 'react-map-gl/maplibre';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import droneModelUrl from '../assets/Flying drone_.glb?url';
+import droneModelUrl from '../assets/drone.glb?url';
 
 const ORIGIN_LAT = 55.752317;
 const ORIGIN_LNG = 48.744578;
 
 const CityMap3D = ({ lamps, droneStatus, path }) => {
     const mapRef = useRef(null);
-    const [modelAdded, setModelAdded] = useState(false);
+    const [mapStyle, setMapStyle] = useState(null);
+
+    // Load base style and inject drone model definition
+    useEffect(() => {
+        fetch("https://tiles.openfreemap.org/styles/liberty")
+            .then(res => res.json())
+            .then(style => {
+                // Ensure absolute URL for the model
+                const absoluteModelUrl = new URL(droneModelUrl, window.location.origin).href;
+                console.log("Drone Model URL:", absoluteModelUrl);
+
+                // Add model definition to the style spec
+                style.models = {
+                    "drone-model": absoluteModelUrl
+                };
+                
+                // Add ambient light if not present (MapLibre v5 style uses 'lights' array or 'light' object for global)
+                // For v5, we might need to add a sky layer or just rely on default.
+                // Let's try adding a simple ambient light configuration if possible.
+                // Actually, let's just make sure the model URL is correct first.
+                
+                setMapStyle(style);
+            })
+            .catch(err => console.error("Failed to load map style", err));
+    }, []);
 
     const onMapLoad = (e) => {
-        const map = e.target;
-        // Check if model already exists
-        const existingModels = map.listModels ? Object.keys(map.listModels()) : [];
-        if (!existingModels.includes('drone-model')) {
-            if (map.addModel) {
-                map.addModel('drone-model', droneModelUrl);
-                // Trigger re-render to ensure layer can use the model
-                setModelAdded(true);
-            }
-        }
+        // No need to add model manually if it's in the style
     };
 
     useEffect(() => {
@@ -187,6 +202,8 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
         }
     } : null;
 
+    if (!mapStyle) return <div style={{color:'white'}}>Loading Map Style...</div>;
+
     return (
         <Map
             onLoad={onMapLoad}
@@ -198,7 +215,7 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                 bearing: -20 // Slight rotation
             }}
             style={{width: '100%', height: '100vh'}}
-            mapStyle="https://tiles.openfreemap.org/styles/liberty"
+            mapStyle={mapStyle}
             mapLib={maplibregl}
             ref={mapRef}
             attributionControl={false}
@@ -252,7 +269,7 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
             </Source>
 
             {/* Drone 3D Model */}
-            {droneStatus && modelAdded && (
+            {droneStatus && (
                 <Source id="drone" type="geojson" data={droneGeoJSON}>
                     <Layer
                         id="drone-model-layer"
@@ -261,14 +278,33 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                             'model-id': 'drone-model'
                         }}
                         paint={{
-                            'model-scale': [10, 10, 10], // Slightly larger to be visible
+                            'model-scale': [100, 100, 100],
                             'model-rotation': [0, 0, -45],
-                            'model-translation': [0, 0, 50], // 50m altitude
-                            'model-opacity': 1
+                            'model-translation': [0, 0, 100],
+                            'model-opacity': 1,
                         }}
                     />
                 </Source>
             )}
+
+            {/* Debug Circle - To verify position */}
+            {droneStatus && (
+                 <Source id="drone-debug" type="geojson" data={droneGeoJSON}>
+                    <Layer
+                        id="drone-debug-circle"
+                        type="circle"
+                        paint={{
+                            'circle-radius': 10,
+                            'circle-color': '#00ff00',
+                            'circle-opacity': 0.5,
+                            'circle-stroke-width': 2,
+                            'circle-stroke-color': '#fff'
+                        }}
+                    />
+                </Source>
+            )}
+
+            {/* Fallback Marker - Removed as we expect model to work now */}
 
         </Map>
     );
