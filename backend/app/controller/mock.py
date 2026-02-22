@@ -1,7 +1,10 @@
 import random
+import logging
 from dataclasses import dataclass, field
 
 from app.controller.base import BaseController, LampData, LampStatusCode
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -38,6 +41,22 @@ class MockController(BaseController):
             )
         return self._states[slave_id]
 
+    def simulate_chaos(self) -> None:
+        """Симуляция случайных поломок: выбирается одна случайная лампа и с вероятностью 3% ломается."""
+        if not self._states:
+            return
+
+        # Выбираем одну случайную лампу
+        slave_id = random.choice(list(self._states.keys()))
+        state = self._states[slave_id]
+
+        # Если лампа исправна, пробуем сломать
+        if state.status == LampStatusCode.OK:
+            # Вероятность 3% (как просил пользователь)
+            if random.random() < 0.3:
+                state.status = LampStatusCode.BURNED_OUT
+                logger.info(f"CHAOS: Lamp {slave_id} BURNED_OUT simulated!")
+
     async def read_lamp_data(self, slave_id: int) -> LampData:
         state = self._get_state(slave_id)
 
@@ -60,11 +79,8 @@ class MockController(BaseController):
         if state.is_on:
             state.hours_active += 1
 
-        # Шанс перегореть: ОТКЛЮЧЕН (по требованию пользователя, лампы не ломаются сами)
-        # if state.is_on and random.random() < 0.03:
-        #    state.status = LampStatusCode.BURNED_OUT
-        #    return LampData(...)
-
+        # Шанс перегореть: управляется из polling loop через simulate_chaos
+        
         # Плавающие показатели
         state.junction_temp_avg += random.uniform(-0.5, 0.5)
         state.junction_temp_avg = max(20.0, min(90.0, state.junction_temp_avg))

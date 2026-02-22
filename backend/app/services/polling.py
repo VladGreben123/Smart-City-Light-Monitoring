@@ -21,7 +21,7 @@ STATUS_MAP = {
     LampStatusCode.BURNED_OUT: LampStatus.BURNED_OUT,
 }
 
-REPAIR_ON_DELAY_SECONDS = 3
+REPAIR_ON_DELAY_SECONDS = 0.5
 _repair_delay_until: dict[int, datetime] = {}
 
 
@@ -39,27 +39,31 @@ def is_in_repair_delay(lamp_id: int) -> bool:
     return True
 
 
-async def _get_failure_probability(client: httpx.AsyncClient, lamp: Lamp) -> float:
-    """Запросить вероятность отказа у AI-сервиса."""
-    # TODO: Временно отключено, так как сервис AI не запущен (вызывает 502 Bad Gateway)
-    # try:
-    #     resp = await client.post(
-    #         f"{settings.AI_SERVICE_URL}/predict",
-    #         json={
-    #             "hours_active": lamp.hours_active,
-    #             "on_off_cycles": lamp.on_off_cycles,
-    #             "avg_temp_exposure": lamp.ambient_temp,
-    #             "temp_fluctuations": int(abs(lamp.junction_temp_avg - lamp.ambient_temp)),
-    #             "voltage_spikes": lamp.voltage_spike_count,
-    #             "humidity_exposure": lamp.humidity_avg,
-    #         },
-    #         timeout=2.0,
-    #     )
-    #     if resp.status_code == 200:
-    #         return resp.json().get("failure_probability", 0.0)
-    # except Exception:
-    #     logger.debug("AI service unavailable, using fallback")
-    return lamp.failure_probability  # оставить прежнее значение
+async def _get_failure_probability(client: httpx.AsyncClient, lamp: Lamp) -> float | None:
+    """Запросить вероятность отказа у AI-сервиса (IT-Tupolev_2026-ai 2, port 8001)."""
+    try:
+        age_years = round(lamp.hours_active / 8760, 2) if lamp.hours_active else 0.0
+        power_w = int(lamp.power_w) if lamp.power_w else 100
+        resp = await client.post(
+            f"{settings.AI_PREDICT_URL}/predict",
+            json={
+                "power_watts": power_w,
+                "quality_tier": "Standard",
+                "age_years": age_years,
+                "operating_hours": lamp.hours_active,
+                "switching_cycles": lamp.on_off_cycles,
+                "voltage_spike_count": lamp.voltage_spike_count,
+                "avg_humidity": lamp.humidity_avg,
+                "avg_temperature": lamp.ambient_temp,
+                "previous_repairs": 0,
+            },
+            timeout=2.0,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("failure_probability", 0.0)
+    except Exception:
+        logger.debug("AI predict service unavailable, using fallback")
+    return None
 
 
 async def polling_loop(
@@ -133,6 +137,8 @@ async def _poll_once(
                 lamp.updated_at = datetime.utcnow()
                 if lamp.status in (LampStatus.BURNED_OUT, LampStatus.ABSENT, LampStatus.MAINTENANCE):
                     # lamp.is_on = False # User requested state depends ONLY on time
+                    if lamp.status == LampStatus.BURNED_OUT:
+                        lamp.failure_probability = 1.0
                     pass
 
                 should_be_on = lamp.is_on
@@ -163,9 +169,15 @@ async def _poll_once(
                             )
 
                 # Запрос вероятности отказа от AI
-                lamp.failure_probability = await _get_failure_probability(
-                    http_client, lamp
-                )
+                fp = await _get_failure_probability(http_client, lamp)
+                if fp is not None:
+                    lamp.failure_probability = fp
+                else:
+                    # Fallback логика:
+                    # Если лампа исправна, но вероятность поломки все еще 1.0 (например, после ремонта или stale data),
+                    # сбрасываем ее в 0.0
+                    if lamp.status == LampStatus.OK and lamp.failure_probability >= 0.99:
+                        lamp.failure_probability = 0.0
 
                 # Запись события при смене статуса
                 if old_status != new_status:

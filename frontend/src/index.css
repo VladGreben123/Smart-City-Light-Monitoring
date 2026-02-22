@@ -63,10 +63,6 @@ html, body, #root {
   transition: transform 0.1s;
 }
 
-.calendar-day:hover {
-  transform: scale(1.02);
-}
-
 .calendar-day.bad {
   background: rgba(231, 76, 60, 0.2);
   border: 1px solid #e74c3c;

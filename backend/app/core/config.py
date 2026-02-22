@@ -7,7 +7,8 @@ class Settings:
     RS485_BAUDRATE: int = int(os.getenv("RS485_BAUDRATE", "9600"))
     POLL_INTERVAL: int = int(os.getenv("POLL_INTERVAL", "5"))  # секунды
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///lamps_30.db")
-    AI_SERVICE_URL: str = os.getenv("AI_SERVICE_URL", "http://localhost:8001")
+    AI_PREDICT_URL: str = os.getenv("AI_PREDICT_URL", "http://localhost:8001")
+    ROUTING_SERVICE_URL: str = os.getenv("ROUTING_SERVICE_URL", "http://localhost:8002")
     LAMP_COUNT: int = int(os.getenv("LAMP_COUNT", "30"))
     # Координаты города для расчёта рассвета/заката (КАИ, Казань)
     CITY_LAT: float = float(os.getenv("CITY_LAT", "55.752"))

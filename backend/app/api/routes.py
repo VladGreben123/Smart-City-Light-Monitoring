@@ -1,14 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 from sqlmodel import Session, select
 import json
 import logging
 import httpx
 
+from app.core.config import settings
 from app.core.database import get_session, engine
 from app.models import Lamp, LampEvent, LampStatus, Streetlight
 from app.controller.base import LampStatusCode
 from app.services.websocket import ws_manager
-from app.services.weather import get_weather_forecast, is_weather_bad_today
+from app.services.weather import get_weather_forecast, is_weather_bad_today, set_weather_override, get_weather_override
 from app.services.polling import schedule_repair_delay
 
 logger = logging.getLogger("api")
@@ -123,6 +125,93 @@ async def get_today_weather():
     async with httpx.AsyncClient() as client:
         is_bad = await is_weather_bad_today(client)
         return {"is_bad_weather": is_bad}
+
+
+# ── Route optimization ───────────────────────────────────
+
+class ScenarioRequest(BaseModel):
+    lamp_ids: list[int]
+    action: str = "break"  # "break" | "reset"
+
+@router.post("/lamps/scenario")
+async def set_scenario(body: ScenarioRequest, request: Request, session: Session = Depends(get_session)):
+    """Сломать или восстановить конкретные лампы для демонстрации сценария."""
+    controller = request.app.state.controller
+    for lamp_id in body.lamp_ids:
+        lamp = session.get(Lamp, lamp_id)
+        if not lamp:
+            continue
+        sl = session.get(Streetlight, lamp.streetlight_id)
+        if body.action == "break":
+            await controller.set_status(sl.modbus_slave_id, LampStatusCode.BURNED_OUT)
+            lamp.status = LampStatus.BURNED_OUT
+            lamp.failure_probability = 1.0
+        else:
+            await controller.set_status(sl.modbus_slave_id, LampStatusCode.OK)
+            lamp.status = LampStatus.OK
+            lamp.failure_probability = 0.0
+        session.add(lamp)
+    session.commit()
+    return {"ok": True}
+
+
+@router.post("/route/optimize")
+async def optimize_drone_route(session: Session = Depends(get_session)):
+    """
+    Получить оптимальный маршрут дрона по лампам с высокой вероятностью отказа.
+    Проксирует запрос к smart_routing_ai (порт 8002).
+    """
+    results = session.exec(
+        select(Streetlight, Lamp)
+        .join(Lamp, isouter=True)
+        .where(
+            (Lamp.failure_probability >= 0.66) |
+            (Lamp.status == LampStatus.BURNED_OUT)
+        )
+    ).all()
+
+    if not results:
+        return {"route_ids": [], "route_geometry": [], "message": "Нет ламп для замены"}
+
+    lamps_payload = [
+        {"id": str(lamp.id), "lat": sl.latitude, "lng": sl.longitude}
+        for sl, lamp in results
+    ]
+
+    payload = {
+        "lamps": lamps_payload,
+        "depot_lat": settings.CITY_LAT,
+        "depot_lng": settings.CITY_LNG,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{settings.ROUTING_SERVICE_URL}/api/v1/optimize",
+                json=payload,
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.ConnectError:
+        raise HTTPException(503, "Smart routing сервис недоступен (порт 8002)")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(502, f"Ошибка от routing сервиса: {e.response.text}")
+
+
+# ── Debug / Weather override ─────────────────────────────
+
+class WeatherOverrideRequest(BaseModel):
+    enabled: bool
+    is_bad: bool = False
+
+@router.post("/debug/weather-override")
+async def weather_override(body: WeatherOverrideRequest):
+    set_weather_override(body.enabled, body.is_bad)
+    return {"ok": True, "enabled": body.enabled, "is_bad": body.is_bad}
+
+@router.get("/debug/weather-override")
+async def weather_override_status():
+    return get_weather_override()
 
 
 # ── WebSocket ────────────────────────────────────────────
