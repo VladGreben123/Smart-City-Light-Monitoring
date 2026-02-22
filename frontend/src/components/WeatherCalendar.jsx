@@ -4,9 +4,9 @@ const WeatherCalendar = ({ onTodayWeatherChange }) => {
     const [forecast, setForecast] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [override, setOverride] = useState({ enabled: false, is_bad: false });
 
-    useEffect(() => {
-        // Запрос к бэкенду
+    const fetchForecast = () => {
         fetch('http://localhost:8000/api/weather/forecast')
             .then(res => {
                 if (!res.ok) throw new Error('Network response was not ok');
@@ -19,14 +19,14 @@ const WeatherCalendar = ({ onTodayWeatherChange }) => {
                 }
                 setForecast(data);
                 setLoading(false);
-                
+
                 // Найти сегодняшнюю дату и передать статус
                 const today = new Date();
                 const year = today.getFullYear();
                 const month = String(today.getMonth() + 1).padStart(2, '0');
                 const day = String(today.getDate()).padStart(2, '0');
                 const todayStr = `${year}-${month}-${day}`;
-                
+
                 const todayData = data.find(d => d.date === todayStr);
                 if (todayData && onTodayWeatherChange) {
                     onTodayWeatherChange(todayData.is_bad_weather);
@@ -39,6 +39,25 @@ const WeatherCalendar = ({ onTodayWeatherChange }) => {
                 setError('Ошибка загрузки погоды');
                 setLoading(false);
             });
+    };
+
+    const setWeatherMode = async (enabled, is_bad = false) => {
+        try {
+            await fetch('http://localhost:8000/api/debug/weather-override', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled, is_bad }),
+            });
+            setOverride({ enabled, is_bad });
+            fetchForecast();
+        } catch (e) {
+            console.error('weather-override failed', e);
+        }
+    };
+
+    useEffect(() => {
+        fetchForecast();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [onTodayWeatherChange]);
 
     if (loading) return null;
@@ -49,8 +68,8 @@ const WeatherCalendar = ({ onTodayWeatherChange }) => {
             <h3>Погодный календарь</h3>
             <div className="calendar-grid">
                 {forecast.map(day => (
-                    <div 
-                        key={day.date} 
+                    <div
+                        key={day.date}
                         className={`calendar-day ${day.is_bad_weather ? 'bad' : 'good'}`}
                         title={day.reason}
                     >
@@ -71,6 +90,23 @@ const WeatherCalendar = ({ onTodayWeatherChange }) => {
             <div style={{fontSize: '10px', marginTop: '5px', textAlign: 'center', color: '#888'}}>
                 ⛔ - Полеты запрещены<br/>
                 ✈️ - Полеты разрешены
+            </div>
+            <div style={{display: 'flex', gap: '4px', marginTop: '6px', justifyContent: 'center'}}>
+                <button onClick={() => setWeatherMode(true, false)} style={{
+                    padding: '3px 8px', fontSize: '11px', borderRadius: '10px', border: 'none',
+                    background: override.enabled && !override.is_bad ? '#2ecc71' : '#bbb',
+                    color: 'white', cursor: 'pointer'
+                }}>🧪 Хорошая</button>
+                <button onClick={() => setWeatherMode(true, true)} style={{
+                    padding: '3px 8px', fontSize: '11px', borderRadius: '10px', border: 'none',
+                    background: override.enabled && override.is_bad ? '#e74c3c' : '#bbb',
+                    color: 'white', cursor: 'pointer'
+                }}>🧪 Плохая</button>
+                <button onClick={() => setWeatherMode(false)} style={{
+                    padding: '3px 8px', fontSize: '11px', borderRadius: '10px', border: 'none',
+                    background: !override.enabled ? '#3498db' : '#bbb',
+                    color: 'white', cursor: 'pointer'
+                }}>🌐 Реальная</button>
             </div>
         </div>
     );
