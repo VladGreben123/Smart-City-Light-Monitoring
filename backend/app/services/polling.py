@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import random
 from datetime import datetime, timedelta
 
 import httpx
@@ -14,6 +15,9 @@ from app.services.websocket import WSManager
 from app.services.daylight import is_dark_now
 
 logger = logging.getLogger("polling")
+
+# Suppress httpx info logs to avoid 502 spam if AI service is down
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 STATUS_MAP = {
     LampStatusCode.ABSENT: LampStatus.ABSENT,
@@ -39,11 +43,35 @@ def is_in_repair_delay(lamp_id: int) -> bool:
     return True
 
 
+def _calculate_mock_failure_probability(lamp: Lamp) -> float:
+    """Mock calculation if AI service is unavailable."""
+    # Base probability
+    prob = 0.01
+    
+    # Age factor (e.g. 1% per year)
+    age_years = (lamp.hours_active or 0) / 8760
+    prob += age_years * 0.01
+    
+    # Voltage spikes (high impact)
+    if lamp.voltage_spike_count:
+        prob += lamp.voltage_spike_count * 0.05
+        
+    # Temperature stress
+    if lamp.junction_temp_avg and lamp.junction_temp_avg > 80:
+        prob += 0.1
+        
+    return min(0.95, max(0.0, prob))
+
+
 async def _get_failure_probability(client: httpx.AsyncClient, lamp: Lamp) -> float | None:
-    """Запросить вероятность отказа у AI-сервиса (IT-Tupolev_2026-ai 2, port 8001)."""
+    """Запросить вероятность отказа у AI-сервиса (AI, port 8001)."""
     try:
         age_years = round(lamp.hours_active / 8760, 2) if lamp.hours_active else 0.0
         power_w = int(lamp.power_w) if lamp.power_w else 100
+        
+        # Check if we should even try (optimization)
+        # If we failed recently, maybe skip? For now, just try.
+        
         resp = await client.post(
             f"{settings.AI_PREDICT_URL}/predict",
             json={
@@ -57,12 +85,23 @@ async def _get_failure_probability(client: httpx.AsyncClient, lamp: Lamp) -> flo
                 "avg_temperature": lamp.ambient_temp,
                 "previous_repairs": 0,
             },
-            timeout=2.0,
+            timeout=1.0, # Reduced timeout for faster fallback
         )
         if resp.status_code == 200:
             return resp.json().get("failure_probability", 0.0)
-    except Exception:
+        else:
+             # If service exists but errors (e.g. 500 or 502), use fallback
+             logger.debug(f"AI service returned {resp.status_code}, using fallback")
+             return _calculate_mock_failure_probability(lamp)
+             
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError):
+        # Service down or unreachable
         logger.debug("AI predict service unavailable, using fallback")
+        return _calculate_mock_failure_probability(lamp)
+    except Exception as e:
+        logger.warning(f"Unexpected error in AI prediction: {e}")
+        return _calculate_mock_failure_probability(lamp)
+    
     return None
 
 

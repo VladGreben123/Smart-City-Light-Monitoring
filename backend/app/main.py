@@ -20,6 +20,11 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)-12s %(levelname)-8s %(message)s",
 )
+
+# Suppress noisy HTTP libraries (avoid 502 spam if AI service is down)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 logger = logging.getLogger("main")
 
 

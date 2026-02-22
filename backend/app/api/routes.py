@@ -160,7 +160,7 @@ async def set_scenario(body: ScenarioRequest, request: Request, session: Session
 async def optimize_drone_route(session: Session = Depends(get_session)):
     """
     Получить оптимальный маршрут дрона по лампам с высокой вероятностью отказа.
-    Проксирует запрос к smart_routing_ai (порт 8002).
+    Проксирует запрос к Routing-AI (порт 8002).
     """
     results = session.exec(
         select(Streetlight, Lamp)
