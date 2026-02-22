@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap, ZoomControl } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css'; // CRITICAL: Required for Leaflet styles
 import L from 'leaflet';
 import WeatherCalendar from './WeatherCalendar';
+import CityMap3D from './CityMap3D';
 
 const ORIGIN_LAT = 55.752317;
 const ORIGIN_LNG = 48.744578;
@@ -125,6 +126,7 @@ const MapUpdater = () => {
 };
 
 const CityMap = () => {
+  const [is3D, setIs3D] = useState(false); // Toggle 3D mode
   const [lamps, setLamps] = useState([]);
   const [wsStatus, setWsStatus] = useState('Отключено');
   const [isBadWeather, setIsBadWeather] = useState(false); // New state for weather
@@ -143,38 +145,8 @@ const CityMap = () => {
   const waitUntilRef = useRef(null);
   const currentSpeedRef = useRef(0); // For smooth acceleration
   
-  // Track manually broken lamps for testing (IDs)
-  const brokenLampIdsRef = useRef(new Set());
   // Track recently repaired lamps to prevent race conditions
   const recentlyRepairedLampIdsRef = useRef(new Set());
-  const [randomFailureEnabled, setRandomFailureEnabled] = useState(false);
-  const failureProbability = 0.3;
-  const checkInterval = 5000;
-
-  const breakRandomLamp = () => {
-    setRandomFailureEnabled(true);
-  };
-
-  const fixAllLamps = () => {
-    brokenLampIdsRef.current.clear();
-    setRandomFailureEnabled(false);
-    setLamps(prev => prev.map(l => ({ ...l, state: 1.0 })));
-  };
-
-  useEffect(() => {
-    if (!randomFailureEnabled) return;
-    const id = setInterval(() => {
-      setLamps(prev => prev.map(l => {
-        if (brokenLampIdsRef.current.has(l.id)) return l;
-        if (Math.random() < failureProbability) {
-          brokenLampIdsRef.current.add(l.id);
-          return { ...l, state: 0.0 };
-        }
-        return l;
-      }));
-    }, checkInterval);
-    return () => clearInterval(id);
-  }, [randomFailureEnabled]);
 
   const connectWebSocket = useCallback(() => {
     // Clear existing timeout if any
@@ -203,9 +175,8 @@ const CityMap = () => {
                 lng: data.lng ?? prev?.lng ?? ORIGIN_LNG,
                 address: data.address ?? prev?.address ?? '',
                 status: data.status ? mapStatusFromApi(data.status, data.is_on ?? (prev?.status === 'on')) : (prev?.status ?? 'off'),
-                state: brokenLampIdsRef.current.has(data.id) ? 0.0 : 
-                       (recentlyRepairedLampIdsRef.current.has(data.id) ? 1.0 :
-                       (typeof data.state === 'number' ? data.state : (prev?.state ?? 1)))
+                state: recentlyRepairedLampIdsRef.current.has(data.id) ? 1.0 :
+                       (typeof data.state === 'number' ? data.state : (prev?.state ?? 1))
               };
 
               if (index === -1) {
@@ -256,11 +227,7 @@ const CityMap = () => {
       .then(data => {
         const mapped = data
           .filter(item => item.lamp_id)
-          .map(mapLampFromApi)
-          .map(l => {
-            if (brokenLampIdsRef.current.has(l.id)) l.state = 0.0;
-            return l;
-          });
+          .map(mapLampFromApi);
         setLamps(mapped);
       })
       .catch(() => {});
@@ -353,11 +320,6 @@ const CityMap = () => {
           const path = dronePath;
           const idx = targetIndexRef.current;
           const lampId = path[idx];
-
-          // Simulate repair locally
-          if (brokenLampIdsRef.current.has(lampId)) {
-            brokenLampIdsRef.current.delete(lampId);
-          }
           
           // Mark as recently repaired to ignore stale backend updates
           recentlyRepairedLampIdsRef.current.add(lampId);
@@ -442,8 +404,92 @@ const CityMap = () => {
     return () => clearTimeout(timeout);
   }, [lamps, droneStatus, startDroneMission, isBadWeather]);
 
+  useEffect(() => {
+    // Inject custom styles for zoom controls
+    const style = document.createElement('style');
+    style.innerHTML = `
+      .leaflet-control-zoom {
+        border: none !important;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
+        margin-left: 10px !important;
+        margin-bottom: 24px !important; /* Raised slightly */
+        display: flex !important;
+        flex-direction: row !important;
+        gap: 2px !important; /* Tiny gap for pill effect */
+        background: transparent !important;
+        overflow: visible !important;
+      }
+      .leaflet-control-zoom-in, .leaflet-control-zoom-out {
+        background-color: #2b2d30 !important; /* Yandex Panel Color */
+        color: #f2f2f2 !important;
+        width: 40px !important;
+        height: 40px !important;
+        line-height: 40px !important;
+        margin: 0 !important;
+        font-size: 18px !important;
+        border: none !important;
+        transition: all 0.2s ease;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3) !important;
+      }
+      /* Pill shape logic */
+      .leaflet-control-zoom-in {
+        border-top-left-radius: 12px !important;
+        border-bottom-left-radius: 12px !important;
+        border-top-right-radius: 0 !important;
+        border-bottom-right-radius: 0 !important;
+        margin-right: 1px !important; /* Thin separator */
+      }
+      .leaflet-control-zoom-out {
+        border-top-right-radius: 12px !important;
+        border-bottom-right-radius: 12px !important;
+        border-top-left-radius: 0 !important;
+        border-bottom-left-radius: 0 !important;
+      }
+      .leaflet-control-zoom-in:hover, .leaflet-control-zoom-out:hover {
+        background-color: #3c3f41 !important;
+        color: white !important;
+        transform: translateY(-1px);
+      }
+      .leaflet-bottom .leaflet-control {
+        margin-bottom: 10px;
+      }
+      .leaflet-left .leaflet-control {
+        margin-left: 10px;
+      }
+      /* Yandex-like Dark Map Style using CSS Filters */
+      .leaflet-layer,
+      .leaflet-control-zoom-in,
+      .leaflet-control-zoom-out,
+      .leaflet-control-attribution {
+        filter: none !important;
+      }
+      .leaflet-tile-pane {
+        filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+      }
+      /* Keep attribution readable */
+      .leaflet-control-attribution {
+        background: rgba(43, 45, 48, 0.8) !important;
+        color: #8f9298 !important;
+        font-size: 10px !important;
+      }
+      .leaflet-control-attribution a {
+        color: #5ac45e !important;
+      }
+      .leaflet-container {
+        background: #2b2d30 !important;
+      }
+    `;
+    document.head.appendChild(style);
+    return () => {
+      document.head.removeChild(style);
+    };
+  }, []);
+
   return (
-    <div style={{ height: '100vh', width: '100%', position: 'relative', fontFamily: 'sans-serif', color: '#333' }}>
+    <div style={{ height: '100vh', width: '100%', position: 'relative', fontFamily: 'sans-serif', color: '#eee' }}>
       <div style={{ 
         position: 'absolute', 
         top: '10px', 
@@ -457,66 +503,51 @@ const CityMap = () => {
         <WeatherCalendar onTodayWeatherChange={setIsBadWeather} />
 
         <div style={{
-          background: 'white', 
-          padding: '8px 12px', 
-          borderRadius: '20px',
-          boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
+          background: '#2b2d30', // Yandex-like panel
+          padding: '10px 16px', 
+          borderRadius: '16px',
+          boxShadow: '0 8px 20px rgba(0,0,0,0.4)',
           fontSize: '13px',
-          fontWeight: '500',
+          fontWeight: '600',
           display: 'flex',
           alignItems: 'center',
-          gap: '8px'
+          gap: '10px',
+          color: '#f2f2f2',
+          border: '1px solid #3c3f41'
         }}>
           <span style={{ 
-            width: '8px', 
-            height: '8px', 
+            width: '10px', 
+            height: '10px', 
             borderRadius: '50%', 
-            background: wsStatus === 'Подключено' ? '#2ecc71' : '#e74c3c' 
+            background: wsStatus === 'Подключено' ? '#5ac45e' : '#ff5c5c', // Brighter status
+            boxShadow: wsStatus === 'Подключено' ? '0 0 10px rgba(90, 196, 94, 0.4)' : '0 0 10px rgba(255, 92, 92, 0.4)'
           }}></span>
-          {wsStatus}
-        </div>
-
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button 
-            onClick={breakRandomLamp}
-            style={{
-              padding: '8px 12px',
-              background: '#e74c3c',
-              color: 'white',
-              border: 'none',
-              borderRadius: '20px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              fontWeight: '500',
-              boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
-            }}
-          >
-            Включить случайные поломки
-          </button>
-          <button 
-            onClick={fixAllLamps}
-            style={{
-              padding: '8px 12px',
-              background: '#2ecc71',
-              color: 'white',
-              border: 'none',
-              borderRadius: '20px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              fontWeight: '500',
-              boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
-            }}
-          >
-            Выключить случайные поломки и починить все
-          </button>
+          <span style={{ letterSpacing: '0.3px' }}>{wsStatus}</span>
         </div>
       </div>
 
+      {is3D ? (
+        <CityMap3D 
+          lamps={lamps}
+          droneStatus={dronePos}
+          path={dronePath}
+        />
+      ) : (
       <MapContainer 
         center={[ORIGIN_LAT, ORIGIN_LNG]} 
-        zoom={15} 
+        zoom={16} 
+        minZoom={15}
+        zoomSnap={0.3} // More steps for smoother zoom
+        zoomDelta={0.5} // Smaller steps
+        wheelPxPerZoomLevel={240} // Slower wheel zoom
+        maxBounds={[
+          [ORIGIN_LAT - 0.015, ORIGIN_LNG - 0.025],
+          [ORIGIN_LAT + 0.015, ORIGIN_LNG + 0.025]
+        ]}
+        maxBoundsViscosity={1.0}
         style={{ height: '100%', width: '100%' }}
         scrollWheelZoom={true}
+        zoomControl={false} // Disable default top-left
       >
         <MapUpdater />
         <TileLayer
@@ -525,6 +556,10 @@ const CityMap = () => {
           subdomains="abcd"
           maxZoom={19}
         />
+        
+        {/* Custom Zoom Control at Bottom Left */}
+        <ZoomControl position="bottomleft" />
+
         
         {/* Droneport Marker */}
         <Marker 
@@ -574,6 +609,42 @@ const CityMap = () => {
           </Marker>
         ))}
       </MapContainer>
+      )}
+
+      <button 
+        onClick={() => setIs3D(!is3D)}
+        style={{
+          position: 'absolute',
+          bottom: '100px',
+          left: '10px',
+          zIndex: 1000,
+          background: '#2b2d30',
+          color: '#f2f2f2',
+          border: '1px solid #3c3f41',
+          borderRadius: '12px',
+          padding: '10px 14px',
+          cursor: 'pointer',
+          fontWeight: '700',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          fontSize: '14px',
+          transition: 'all 0.2s ease',
+          outline: 'none'
+        }}
+        onMouseOver={(e) => {
+          e.currentTarget.style.background = '#3c3f41';
+          e.currentTarget.style.transform = 'translateY(-2px)';
+        }}
+        onMouseOut={(e) => {
+          e.currentTarget.style.background = '#2b2d30';
+          e.currentTarget.style.transform = 'translateY(0)';
+        }}
+      >
+        <span style={{ fontSize: '18px' }}>{is3D ? '🗺️' : '🧊'}</span>
+        <span>{is3D ? '2D режим' : '3D режим'}</span>
+      </button>
     </div>
   );
 };
