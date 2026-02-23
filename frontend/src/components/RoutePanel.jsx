@@ -8,25 +8,34 @@ const RoutePanel = ({ brokenCount, minToFly = 3, routeData, droneStatus }) => {
     const waiting = !isFlying && brokenCount < minToFly;
 
     return (
-        <div style={{
-            position: 'absolute',
-            top: '20px',
-            left: '10px',
-            zIndex: 1000,
-            background: 'white',
-            borderRadius: '12px',
-            boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
-            padding: '10px 14px',
-            minWidth: '220px',
-            maxWidth: '260px',
-            fontFamily: 'sans-serif',
-            fontSize: '12px',
-            color: '#333',
-        }}>
-            <div style={{ fontWeight: '600', fontSize: '13px', marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>🤖 {isFlying ? 'Текущий маршрут' : 'Последний маршрут'}</span>
+        <div
+            className="glass-panel"
+            style={{
+                padding: '12px 16px',
+                minWidth: '240px',
+                maxWidth: '300px',
+                fontFamily: 'sans-serif',
+                fontSize: '12px',
+                color: '#f2f2f2'
+            }}
+        >
+            <div style={{ fontWeight: '600', fontSize: '13px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{
+                        width: '10px',
+                        height: '10px',
+                        borderRadius: '50%',
+                        background: isFlying ? '#5ac45e' : waiting ? '#ffb74d' : '#5c9ce6',
+                        boxShadow: isFlying
+                            ? '0 0 8px rgba(90,196,94,0.5)'
+                            : waiting
+                                ? '0 0 8px rgba(255,183,77,0.5)'
+                                : '0 0 8px rgba(92,156,230,0.5)'
+                    }} />
+                    <span>Маршрут дрона</span>
+                </span>
                 {routeData?.timestamp && !isFlying && (
-                    <span style={{ fontSize: '10px', color: '#999', fontWeight: 'normal' }}>
+                    <span style={{ fontSize: '10px', color: '#8f9298', fontWeight: 'normal' }}>
                         {new Date(routeData.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
                 )}
@@ -36,7 +45,7 @@ const RoutePanel = ({ brokenCount, minToFly = 3, routeData, droneStatus }) => {
             <div style={{
                 fontSize: '11px',
                 color: isFlying ? '#2ecc71' : waiting ? '#e67e22' : '#3498db',
-                marginBottom: '6px',
+                marginBottom: '8px',
                 fontWeight: '500',
             }}>
                 {isFlying && '✈ Дрон в полёте'}
@@ -56,14 +65,17 @@ const RoutePanel = ({ brokenCount, minToFly = 3, routeData, droneStatus }) => {
                         <Stat label="Ветер" value={`${routeData.wind_speed?.toFixed(1) ?? '—'} м/с`} />
                         <Stat label="Направление" value={degToDir(routeData.wind_deg)} />
                     </div>
-                    <div style={{ fontSize: '11px', color: '#555', marginBottom: '4px' }}>
+                    <div style={{ fontSize: '11px', color: '#8f9298', marginBottom: '4px' }}>
                         <strong>Порядок:</strong>
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                         {routeData.route_ids?.map((id, i) => (
                             <span key={id} style={{
-                                background: '#f0f0f0', borderRadius: '8px',
-                                padding: '1px 7px', fontSize: '11px',
+                                background: '#3c3f41',
+                                borderRadius: '8px',
+                                padding: '2px 8px',
+                                fontSize: '11px',
+                                color: '#f2f2f2',
                             }}>
                                 {i + 1}. #{id}
                             </span>
@@ -77,8 +89,8 @@ const RoutePanel = ({ brokenCount, minToFly = 3, routeData, droneStatus }) => {
 
 const Stat = ({ label, value, color }) => (
     <div>
-        <div style={{ color: '#999', fontSize: '10px' }}>{label}</div>
-        <div style={{ fontWeight: '600', color: color || '#333' }}>{value}</div>
+        <div style={{ color: '#8f9298', fontSize: '10px' }}>{label}</div>
+        <div style={{ fontWeight: '600', color: color || '#f2f2f2' }}>{value}</div>
     </div>
 );
 

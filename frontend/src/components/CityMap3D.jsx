@@ -211,7 +211,7 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                             map.setPaintProperty(layer.id, 'text-halo-color', '#000000');
                             map.setPaintProperty(layer.id, 'text-halo-width', 1);
                             map.setPaintProperty(layer.id, 'text-color', '#cccccc');
-                         } catch (e) {
+                         } catch {
                              // Ignore errors
                          }
                     }

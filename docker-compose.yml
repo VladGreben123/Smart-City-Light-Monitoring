@@ -1,0 +1,41 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - AI_PREDICT_URL=http://ai:8001
+      - ROUTING_SERVICE_URL=http://routing-ai:8002
+      - DATABASE_URL=sqlite:///lamps_30.db
+      - POLL_INTERVAL=5
+      - CITY_LAT=55.751244
+      - CITY_LNG=48.744537
+      - YANDEX_WEATHER_API_KEY=${YANDEX_WEATHER_API_KEY}
+    env_file:
+      - .env
+    volumes:
+      - ./backend/lamps_30.db:/app/lamps_30.db
+    depends_on:
+      - ai
+      - routing-ai
+
+  ai:
+    build: ./AI
+    ports:
+      - "8001:8001"
+    environment:
+      - PORT=8001
+
+  routing-ai:
+    build: ./Routing-AI
+    ports:
+      - "8002:8002"
+    environment:
+      - PORT=8002
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend

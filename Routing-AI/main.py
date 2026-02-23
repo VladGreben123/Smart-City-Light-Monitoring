@@ -32,11 +32,9 @@ async def optimize_endpoint(req: OptimizeRequest):
         x, y = geo_to_meters(lamp.lat, lamp.lng, req.depot_lat, req.depot_lng)
         lamps_xy.append({'id': lamp.id, 'pos_xy': (x, y)})
 
-    # 4. Оптимизация AI (Genetic Algorithm)
-    best_route, best_energy = optimizer.solve(lamps_xy)
-
-    # 5. Сравнение с Базой (Nearest Neighbor)
-    naive_route, naive_energy = optimizer.solve_nearest_neighbor(lamps_xy)
+    # 4. Быстрая оптимизация (Nearest Neighbor)
+    best_route, best_energy = optimizer.solve_nearest_neighbor(lamps_xy)
+    naive_route, naive_energy = best_route, best_energy
 
     # 6. Геометрия
     geometry = [[req.depot_lat, req.depot_lng]]

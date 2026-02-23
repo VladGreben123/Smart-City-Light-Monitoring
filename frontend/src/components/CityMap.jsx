@@ -114,7 +114,7 @@ const MapUpdater = () => {
 const CityMap = () => {
   const [is3D, setIs3D] = useState(false); // Toggle 3D mode
   const [lamps, setLamps] = useState([]);
-  const [wsStatus, setWsStatus] = useState('Отключено');
+  const [, setWsStatus] = useState('Отключено');
   const [isBadWeather, setIsBadWeather] = useState(false); // New state for weather
   const ws = useRef(null);
   const reconnectTimeout = useRef(null);
@@ -131,12 +131,11 @@ const CityMap = () => {
   const waitUntilRef = useRef(null);
   const currentSpeedRef = useRef(0); // For smooth acceleration
   
-  // Track manually broken lamps for scenarios (IDs)
-  const brokenLampIdsRef = useRef(new Set());
-  // Track recently repaired lamps to prevent race conditions
-  const recentlyRepairedLampIdsRef = useRef(new Set());
-  const [routeData, setRouteData] = useState(null);
+  const [routeData, setRouteData] = useState(null); // Data from Routing-AI
+  const isPlanningRef = useRef(false); // Prevent multiple concurrent mission starts
+
   const [activeScenario, setActiveScenario] = useState(null);
+  const [showScenarios, setShowScenarios] = useState(false);
 
   const SCENARIOS = [
     { id: 1, label: 'Сценарий 1', desc: '3 лампы', lampIds: [2, 8, 20], color: '#e67e22' },
@@ -145,35 +144,25 @@ const CityMap = () => {
   ];
 
   const resetAllLamps = async () => {
-    const prevBroken = [...brokenLampIdsRef.current];
-    brokenLampIdsRef.current.clear();
-    setLamps(prev => prev.map(l => ({ ...l, state: 1.0 })));
     setActiveScenario(null);
-    if (prevBroken.length > 0) {
-      fetch('http://localhost:8000/api/lamps/scenario', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lamp_ids: prevBroken, action: 'reset' }),
-      }).catch(() => {});
-    }
+    // Send request to backend, no optimistic update
+    fetch('http://localhost:8000/api/lamps/scenario', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lamp_ids: Array.from({length: 30}, (_, i) => i + 1), action: 'fix' }),
+    }).catch(() => {});
   };
 
   const activateScenario = async (scenario) => {
-    const prevBroken = [...brokenLampIdsRef.current];
-    brokenLampIdsRef.current = new Set(scenario.lampIds);
-    const ids = new Set(scenario.lampIds);
     setActiveScenario(scenario.id);
-    setLamps(prev => prev.map(l => ({
-      ...l,
-      state: ids.has(l.id) ? 0.0 : 1.0,
-    })));
-    if (prevBroken.length > 0) {
-      await fetch('http://localhost:8000/api/lamps/scenario', {
+    // 1. Reset everything first (optional, but good for consistency)
+    await fetch('http://localhost:8000/api/lamps/scenario', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lamp_ids: prevBroken, action: 'reset' }),
-      }).catch(() => {});
-    }
+        body: JSON.stringify({ lamp_ids: Array.from({length: 30}, (_, i) => i + 1), action: 'fix' }),
+    }).catch(() => {});
+
+    // 2. Break specific lamps
     fetch('http://localhost:8000/api/lamps/scenario', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -216,18 +205,8 @@ const CityMap = () => {
               const newIsOn = data.is_on ?? prev?.is_on ?? false;
 
               // Logic for state (health):
-              // 1. If manually broken (scenario), force 0.0
-              // 2. If recently repaired, force 1.0
-              // 3. If broken from backend, force 0.0
-              // 4. Otherwise use data.state or keep previous
-              let newState = brokenLampIdsRef.current.has(data.id) ? 0.0 :
-                             (recentlyRepairedLampIdsRef.current.has(data.id) ? 1.0 :
-                             (isBroken ? 0.0 : (typeof data.state === 'number' ? data.state : (prev?.state ?? 1))));
-
-              // Ensure we don't overwrite with stale data if backend is lagging behind a repair
-              if (recentlyRepairedLampIdsRef.current.has(data.id)) {
-                   newState = 1.0;
-              }
+              // Purely from backend now.
+              let newState = isBroken ? 0.0 : (typeof data.state === 'number' ? data.state : (prev?.state ?? 1));
 
               const nextLamp = {
                 id: data.id,
@@ -289,11 +268,7 @@ const CityMap = () => {
       .then(data => {
         const mapped = data
           .filter(item => item.id)
-          .map(mapLampFromApi)
-          .map(l => {
-            if (brokenLampIdsRef.current.has(l.id)) l.state = 0.0;
-            return l;
-          });
+          .map(mapLampFromApi);
         setLamps(mapped);
       })
       .catch(() => {});
@@ -327,126 +302,170 @@ const CityMap = () => {
   }, [currentTargetIndex]);
 
   useEffect(() => {
-    if (droneStatus !== 'toLamp' && droneStatus !== 'return') return;
-    if (dronePath.length === 0 && droneStatus === 'toLamp') return;
+    if (droneStatus !== 'toLamp' && droneStatus !== 'return') {
+        if (animationRef.current) {
+            cancelAnimationFrame(animationRef.current);
+            animationRef.current = null;
+        }
+        return;
+    }
+    
+    // Safety check for empty path
+    if (droneStatus === 'toLamp' && (!dronePath || dronePath.length === 0)) {
+        setDroneStatus('return');
+        return;
+    }
 
-    const maxSpeed = 0.00003;
+    // Reset wait timer on new target/status
+    waitUntilRef.current = null;
+
+    const maxSpeed = 0.00001; // Slower speed for better precision
     const acceleration = 0.0000005;
     const decelerationDist = 0.0005;
+    let lastTime = performance.now();
 
-    const step = () => {
-      const pos = dronePosRef.current;
-      let target;
-
-      if (droneStatusRef.current === 'toLamp') {
-        const path = dronePath;
-        const idx = targetIndexRef.current;
-        const lampId = path[idx];
-        const lamp = lampsRef.current.find(l => l.id === lampId);
-
-        if (!lamp) {
-          if (idx + 1 < path.length) {
-            setCurrentTargetIndex(prev => prev + 1);
-          } else {
-            setDroneStatus('return');
-          }
-          return;
-        }
-
-        target = { lat: lamp.lat, lng: lamp.lng };
-      } else {
-        target = { lat: DRONEPORT_LAT, lng: DRONEPORT_LNG };
-      }
-
-      const dx = target.lng - pos.lng;
-      const dy = target.lat - pos.lat;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-
-      // Animation Logic
-      if (dist < 0.00005) {
-        // Reached target
-        currentSpeedRef.current = 0; // Reset speed
-
-        if (droneStatusRef.current === 'toLamp') {
-          const now = performance.now();
-
-          if (!waitUntilRef.current) {
-            waitUntilRef.current = now + 1000;
-            animationRef.current = requestAnimationFrame(step);
-            return;
-          }
-
-          if (now < waitUntilRef.current) {
-            animationRef.current = requestAnimationFrame(step);
-            return;
-          }
-
-          waitUntilRef.current = null;
-
-          const path = dronePath;
-          const idx = targetIndexRef.current;
-          const lampId = path[idx];
-          
-          // Simulate repair locally
-          if (brokenLampIdsRef.current.has(lampId)) {
-            brokenLampIdsRef.current.delete(lampId);
-          }
-            
-          // Sync with backend (ALWAYS repair, whether manual or random)
-          fetch(`http://localhost:8000/api/lamps/${lampId}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: 'ok' })
-          }).catch(e => console.error("Repair sync failed", e));
-
-          // Mark as recently repaired to ignore stale backend updates
-          recentlyRepairedLampIdsRef.current.add(lampId);
-          setTimeout(() => {
-            recentlyRepairedLampIdsRef.current.delete(lampId);
-          }, 10000);
-
-          setLamps(prev => prev.map(l => 
-            l.id === lampId ? { ...l, state: 1.0 } : l
-          ));
-
-          if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-            const message = JSON.stringify({ id: lampId, state: 1 });
-            ws.current.send(message);
-          }
-
-          if (idx + 1 < path.length) {
-            setCurrentTargetIndex(prev => prev + 1);
-          } else {
-            setDroneStatus('return');
-          }
-        } else {
-          setDroneStatus('idle');
-          setDronePath([]);
-          setCurrentTargetIndex(0);
-          setDronePos({ lat: DRONEPORT_LAT, lng: DRONEPORT_LNG });
-        }
-      } else {
-        // Move towards target
+    const step = (time) => {
+      try {
+        const dt = time - lastTime;
+        lastTime = time;
         
-        // Acceleration / Deceleration
-        if (dist < decelerationDist) {
-          // Decelerate
-          currentSpeedRef.current = Math.max(0.000005, currentSpeedRef.current - acceleration);
+        // Limit dt to avoid huge jumps if tab was inactive
+        const safeDt = Math.min(dt, 50);
+
+        const pos = dronePosRef.current;
+        let target;
+
+        // Use direct variables from closure where possible to avoid Ref desync
+        // currentTargetIndex is fixed for this effect instance
+        const currentIdx = currentTargetIndex; 
+        const currentPath = dronePath;
+        const currentStatus = droneStatus;
+
+        if (currentStatus === 'toLamp') {
+          if (currentIdx >= currentPath.length) {
+              setDroneStatus('return');
+              return;
+          }
+
+          const lampId = currentPath[currentIdx];
+          const lamp = lampsRef.current.find(l => l.id === lampId);
+
+          if (!lamp) {
+            console.warn(`Lamp ${lampId} not found, skipping`);
+            if (currentIdx + 1 < currentPath.length) {
+              setCurrentTargetIndex(prev => prev + 1);
+            } else {
+              setDroneStatus('return');
+            }
+            return;
+          }
+
+          target = { lat: lamp.lat, lng: lamp.lng };
         } else {
-          // Accelerate
-          currentSpeedRef.current = Math.min(maxSpeed, currentSpeedRef.current + acceleration);
+          target = { lat: DRONEPORT_LAT, lng: DRONEPORT_LNG };
         }
 
-        const moveDist = currentSpeedRef.current;
-        const ratio = moveDist / dist;
+        const dx = target.lng - pos.lng;
+        const dy = target.lat - pos.lat;
+        const dist = Math.sqrt(dx * dx + dy * dy);
 
-        setDronePos(prev => ({
-          lat: prev.lat + dy * ratio,
-          lng: prev.lng + dx * ratio
-        }));
+        // Animation Logic - High precision arrival
+        if (dist < 0.000005) {
+          // Reached target
+          currentSpeedRef.current = 0; // Reset speed
+          
+          // Snap to exact target position to avoid visual gap
+          if (dist > 0) {
+              setDronePos(target);
+          }
+
+          if (currentStatus === 'toLamp') {
+            const now = performance.now();
+
+            if (!waitUntilRef.current) {
+              // Start waiting
+              console.log("Arrived at lamp, starting repair...");
+              waitUntilRef.current = now + 1000;
+              animationRef.current = requestAnimationFrame(step);
+              return;
+            }
+
+            if (now < waitUntilRef.current) {
+              // Still waiting
+              animationRef.current = requestAnimationFrame(step);
+              return;
+            }
+
+            // Waiting done
+            waitUntilRef.current = null;
+
+            const lampId = currentPath[currentIdx];
+            console.log(`Repairing lamp ${lampId}...`);
+            
+            // Sync with backend (ALWAYS repair)
+            fetch(`http://localhost:8000/api/lamps/${lampId}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ status: 'ok' })
+            }).catch(e => console.error("Repair sync failed", e));
+
+            // Force local update for immediate feedback
+            setLamps(prev => prev.map(l => 
+                l.id === lampId ? { ...l, state: 1.0, status: 'ok' } : l
+            ));
+
+            if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+              const message = JSON.stringify({ id: lampId, state: 1 });
+              ws.current.send(message);
+            }
+
+            if (currentIdx + 1 < currentPath.length) {
+              console.log(`Moving to next lamp. Current: ${currentIdx}, Next: ${currentIdx + 1}`);
+              setCurrentTargetIndex(prev => prev + 1);
+              return; // Stop this loop, let effect restart
+            } else {
+              console.log("All lamps visited, returning");
+              setDroneStatus('return');
+              return; // Stop this loop, let effect restart
+            }
+          } else {
+            // Reached Droneport
+            console.log("Returned to base");
+            setDroneStatus('idle');
+            setDronePath([]);
+            setCurrentTargetIndex(0);
+            setDronePos({ lat: DRONEPORT_LAT, lng: DRONEPORT_LNG });
+            return; // Stop animation
+          }
+        } else {
+          // Move towards target
+          
+          // Acceleration / Deceleration
+          if (dist < decelerationDist) {
+            // Decelerate
+            currentSpeedRef.current = Math.max(0.000005, currentSpeedRef.current - acceleration * safeDt);
+          } else {
+            // Accelerate
+            currentSpeedRef.current = Math.min(maxSpeed, currentSpeedRef.current + acceleration * safeDt);
+          }
+
+          const moveDist = currentSpeedRef.current * safeDt; // Scale by dt
+          // Ensure we don't overshoot
+          const actualMove = Math.min(moveDist, dist); 
+          const ratio = actualMove / dist;
+
+          setDronePos(prev => ({
+            lat: prev.lat + dy * ratio,
+            lng: prev.lng + dx * ratio
+          }));
+        }
+
+        animationRef.current = requestAnimationFrame(step);
+      } catch (e) {
+        console.error("Animation step error:", e);
+        // Try to recover?
+        // animationRef.current = requestAnimationFrame(step);
       }
-
-      animationRef.current = requestAnimationFrame(step);
     };
 
     animationRef.current = requestAnimationFrame(step);
@@ -454,55 +473,115 @@ const CityMap = () => {
     return () => {
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
     };
-  }, [droneStatus, dronePath]);
+  }, [droneStatus, dronePath, currentTargetIndex]);
 
   const MIN_BROKEN_TO_FLY = 1;
 
   const startDroneMission = useCallback(async () => {
     if (droneStatus !== 'idle') return;
     if (isBadWeather) return;
+    if (isPlanningRef.current) return;
 
-    const brokenLamps = lampsRef.current.filter(l => l.state <= 0.34);
-    if (brokenLamps.length < MIN_BROKEN_TO_FLY) return;
+    isPlanningRef.current = true;
 
-    // Запрашиваем оптимальный маршрут для всех случаев (даже 1 лампа) для получения метрик
-    let pathIds = brokenLamps.map(l => l.id);
-    
-    if (brokenLamps.length >= 1) {
-      try {
-        const resp = await fetch('http://localhost:8000/api/route/optimize', { method: 'POST' });
-        if (resp.ok) {
-          const data = await resp.json();
-          // Only update if we got a valid route, preserving last flight stats otherwise
-          if (!data.message) {
-            setRouteData({ ...data, timestamp: Date.now() });
-          }
-          
-          if (data.route_ids?.length > 0) {
-            const brokenIdSet = new Set(brokenLamps.map(l => l.id));
-            const ordered = data.route_ids.map(Number).filter(id => brokenIdSet.has(id));
-            const remaining = brokenLamps.map(l => l.id).filter(id => !ordered.includes(id));
-            pathIds = [...ordered, ...remaining];
-          }
+    try {
+        const brokenLamps = lampsRef.current.filter(l => l.state <= 0.34);
+        if (brokenLamps.length < MIN_BROKEN_TO_FLY) return;
+
+        // Запрашиваем оптимальный маршрут для всех случаев (даже 1 лампа) для получения метрик
+        let pathIds = brokenLamps.map(l => l.id);
+        
+        if (brokenLamps.length >= 1) {
+        try {
+            // Add abort controller with 3s timeout to prevent long hangs
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+            const resp = await fetch('http://localhost:8000/api/route/optimize', { 
+                method: 'POST',
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+
+            if (resp.ok) {
+            const data = await resp.json();
+            // Only update if we got a valid route, preserving last flight stats otherwise
+            if (!data.message) {
+                setRouteData({ ...data, timestamp: Date.now() });
+            }
+            
+            if (data.route_ids?.length > 0) {
+                const brokenIdSet = new Set(brokenLamps.map(l => l.id));
+                const ordered = data.route_ids.map(Number).filter(id => brokenIdSet.has(id));
+                const remaining = brokenLamps.map(l => l.id).filter(id => !ordered.includes(id));
+                pathIds = [...ordered, ...remaining];
+            }
+            }
+        } catch (e) {
+            console.error('Route optimization failed or timed out, using local Nearest Neighbor fallback', e);
+            
+            // Local Nearest Neighbor Algorithm
+            const remaining = [...brokenLamps];
+            const sortedIds = [];
+            let currentPos = { lat: DRONEPORT_LAT, lng: DRONEPORT_LNG };
+
+            while (remaining.length > 0) {
+                // Find nearest
+                let nearestIdx = -1;
+                let minDist = Infinity;
+
+                remaining.forEach((lamp, idx) => {
+                    const d = Math.sqrt(
+                        Math.pow(lamp.lat - currentPos.lat, 2) + 
+                        Math.pow(lamp.lng - currentPos.lng, 2)
+                    );
+                    if (d < minDist) {
+                        minDist = d;
+                        nearestIdx = idx;
+                    }
+                });
+
+                if (nearestIdx !== -1) {
+                    const nearest = remaining[nearestIdx];
+                    sortedIds.push(nearest.id);
+                    currentPos = { lat: nearest.lat, lng: nearest.lng };
+                    remaining.splice(nearestIdx, 1);
+                } else {
+                    break; // Should not happen
+                }
+            }
+            pathIds = sortedIds;
         }
-      } catch (e) {
-        console.error('Route optimization failed, using default order', e);
-      }
-    }
+        }
 
-    setDronePath(pathIds);
-    setCurrentTargetIndex(0);
-    setDronePos({ lat: DRONEPORT_LAT, lng: DRONEPORT_LNG });
-    setDroneStatus('toLamp');
+        if (pathIds.length > 0) {
+            setDronePath(pathIds);
+            setCurrentTargetIndex(0);
+            setDronePos({ lat: DRONEPORT_LAT, lng: DRONEPORT_LNG });
+            setDroneStatus('toLamp');
+        }
+    } finally {
+        isPlanningRef.current = false;
+    }
   }, [droneStatus, isBadWeather]);
+
+  // Memoize broken lamps identifier to avoid unnecessary resets on noisy updates
+  const brokenLampIdsHash = lamps
+    .filter(l => l.state <= 0.34)
+    .map(l => l.id)
+    .sort()
+    .join(',');
 
   useEffect(() => {
     if (droneStatus !== 'idle') return;
     if (isBadWeather) return;
-    if (lamps.filter(l => l.state <= 0.34).length < MIN_BROKEN_TO_FLY) return;
-    const timeout = setTimeout(() => startDroneMission(), 500);
+    if (!brokenLampIdsHash) return;
+
+    // Delay before launch (0.5s - 1.0s requirement)
+    // Using 600ms to be safe above 0.5s
+    const timeout = setTimeout(() => startDroneMission(), 600);
     return () => clearTimeout(timeout);
-  }, [lamps, droneStatus, startDroneMission, isBadWeather]);
+  }, [brokenLampIdsHash, droneStatus, startDroneMission, isBadWeather]);
 
   useEffect(() => {
     // Inject custom styles for zoom controls
@@ -601,89 +680,95 @@ const CityMap = () => {
         gap: '8px'
       }}>
         <WeatherCalendar onTodayWeatherChange={setIsBadWeather} />
+ 
+        <button
+          className="glass-button"
+          style={{
+            padding: '8px 12px',
+            fontSize: '12px',
+            fontWeight: '600',
+            cursor: 'pointer',
+            border: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            color: '#f2f2f2'
+          }}
+          onClick={() => setShowScenarios(v => !v)}
+        >
+          <span>⚙</span>
+          <span>Сценарии</span>
+        </button>
 
-        <div style={{
-          background: '#2b2d30', // Yandex-like panel
-          padding: '10px 16px', 
-          borderRadius: '16px',
-          boxShadow: '0 8px 20px rgba(0,0,0,0.4)',
-          fontSize: '13px',
-          fontWeight: '600',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-          color: '#f2f2f2',
-          border: '1px solid #3c3f41'
-        }}>
-          <span style={{ 
-            width: '10px', 
-            height: '10px', 
-            borderRadius: '50%', 
-            background: wsStatus === 'Подключено' ? '#5ac45e' : '#ff5c5c', // Brighter status
-            boxShadow: wsStatus === 'Подключено' ? '0 0 10px rgba(90, 196, 94, 0.4)' : '0 0 10px rgba(255, 92, 92, 0.4)'
-          }}></span>
-          <span style={{ letterSpacing: '0.3px' }}>{wsStatus}</span>
-        </div>
-
-        <div style={{
-          background: '#2b2d30',
-          borderRadius: '12px',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-          padding: '8px 10px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '5px',
-          minWidth: '150px',
-          border: '1px solid #3c3f41',
-        }}>
-          <div style={{ fontSize: '11px', fontWeight: '600', color: '#8f9298', marginBottom: '2px' }}>
-            🎬 Сценарии
-          </div>
-          {SCENARIOS.map(s => (
-            <button
-              key={s.id}
-              onClick={() => activateScenario(s)}
-              style={{
-                padding: '5px 10px',
-                background: activeScenario === s.id ? s.color : '#3c3f41',
-                color: '#f2f2f2',
-                border: 'none',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                fontSize: '12px',
-                fontWeight: '500',
-                textAlign: 'left',
-                transition: 'all 0.2s',
-              }}
-            >
-              {s.label} <span style={{ opacity: 0.6, fontSize: '11px' }}>({s.desc})</span>
-            </button>
-          ))}
-          <button
-            onClick={resetAllLamps}
+        {showScenarios && (
+          <div
+            className="glass-panel"
             style={{
-              padding: '5px 10px',
-              background: activeScenario ? '#2ecc71' : '#3c3f41',
-              color: activeScenario ? 'white' : '#8f9298',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              fontSize: '11px',
-              marginTop: '2px',
-              transition: 'all 0.2s',
+              padding: '8px 10px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '5px',
+              minWidth: '150px'
             }}
           >
-            ✓ Сбросить
-          </button>
-        </div>
+            <div style={{ fontSize: '11px', fontWeight: '600', color: '#8f9298', marginBottom: '2px' }}>
+              Сценарии миссий
+            </div>
+            {SCENARIOS.map(s => (
+              <button
+                key={s.id}
+                onClick={() => activateScenario(s)}
+                className="glass-button"
+                style={{
+                  padding: '5px 10px',
+                  background: activeScenario === s.id ? s.color : '#3c3f41',
+                  color: '#f2f2f2',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontWeight: '500',
+                  textAlign: 'left',
+                  transition: 'all 0.2s'
+                }}
+              >
+                {s.label} <span style={{ opacity: 0.6, fontSize: '11px' }}>({s.desc})</span>
+              </button>
+            ))}
+            <button
+              onClick={resetAllLamps}
+              className="glass-button"
+              style={{
+                padding: '5px 10px',
+                background: activeScenario ? '#2ecc71' : '#3c3f41',
+                color: activeScenario ? 'white' : '#8f9298',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: '11px',
+                marginTop: '2px',
+                transition: 'all 0.2s'
+              }}
+            >
+              ✓ Сбросить
+            </button>
+          </div>
+        )}
       </div>
 
-      <RoutePanel
-        brokenCount={lamps.filter(l => l.state <= 0.34).length}
-        minToFly={MIN_BROKEN_TO_FLY}
-        routeData={routeData}
-        droneStatus={droneStatus}
-      />
+      <div
+        style={{
+          position: 'absolute',
+          top: '10px',
+          left: '10px',
+          zIndex: 1000
+        }}
+      >
+        <RoutePanel
+          brokenCount={lamps.filter(l => l.state <= 0.34).length}
+          minToFly={MIN_BROKEN_TO_FLY}
+          routeData={routeData}
+          droneStatus={droneStatus}
+        />
+      </div>
 
       {is3D ? (
         <CityMap3D 
@@ -772,37 +857,46 @@ const CityMap = () => {
 
       <button 
         onClick={() => setIs3D(!is3D)}
+        className="glass-button"
         style={{
           position: 'absolute',
-          bottom: '100px',
-          left: '10px',
+          bottom: '20px',
+          right: '20px',
           zIndex: 1000,
-          background: '#2b2d30',
-          color: '#f2f2f2',
-          border: '1px solid #3c3f41',
-          borderRadius: '12px',
-          padding: '10px 14px',
+          padding: '0',
+          width: '64px',
+          height: '64px',
+          border: 'none',
           cursor: 'pointer',
-          fontWeight: '700',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
           display: 'flex',
           alignItems: 'center',
-          gap: '8px',
-          fontSize: '14px',
-          transition: 'all 0.2s ease',
-          outline: 'none'
-        }}
-        onMouseOver={(e) => {
-          e.currentTarget.style.background = '#3c3f41';
-          e.currentTarget.style.transform = 'translateY(-2px)';
-        }}
-        onMouseOut={(e) => {
-          e.currentTarget.style.background = '#2b2d30';
-          e.currentTarget.style.transform = 'translateY(0)';
+          justifyContent: 'center',
+          background: 'transparent',
+          transform: is3D
+              ? 'perspective(120px) rotateX(45deg) rotateY(0deg)'
+              : 'none'
         }}
       >
-        <span style={{ fontSize: '18px' }}>{is3D ? '🗺️' : '🧊'}</span>
-        <span>{is3D ? '2D режим' : '3D режим'}</span>
+        <div
+          style={{
+            width: '46px',
+            height: '46px',
+            borderRadius: '12px',
+            background: is3D
+              ? 'linear-gradient(145deg, #3c3f41, #1f2023)'
+              : 'linear-gradient(145deg, #3c3f41, #1f2023)',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#f2f2f2',
+            fontWeight: '800',
+            fontSize: '16px',
+            letterSpacing: '1px',
+          }}
+        >
+          {is3D ? '2D' : '3D'}
+        </div>
       </button>
     </div>
   );

@@ -70,19 +70,15 @@ const WeatherCalendar = ({ onTodayWeatherChange }) => {
 
         return (
             <div 
-                className="weather-calendar collapsed" 
+                className="weather-calendar collapsed glass-panel" 
                 onClick={() => setIsExpanded(true)}
                 style={{ 
-                    cursor: 'pointer', 
+                    cursor: 'pointer',
                     padding: '16px 20px',
                     display: 'flex',
                     flexDirection: 'column',
                     gap: '16px',
-                    background: '#2b2d30', // Yandex-like dark panel
-                    borderRadius: '16px',
-                    boxShadow: '0 8px 20px rgba(0,0,0,0.4)',
-                    color: '#f2f2f2',
-                    border: '1px solid #3c3f41' // Subtle border
+                    color: '#f2f2f2'
                 }}
             >
                 {/* Header Status */}
@@ -168,29 +164,25 @@ const WeatherCalendar = ({ onTodayWeatherChange }) => {
     }
 
     return (
-        <div className="weather-calendar expanded" style={{ 
-            minWidth: '460px', 
-            background: '#2b2d30',
-            borderRadius: '16px',
-            boxShadow: '0 12px 32px rgba(0,0,0,0.5)',
+        <div className="weather-calendar expanded glass-panel" style={{ 
+            minWidth: '460px',
             padding: '24px',
             maxHeight: '80vh',
             overflowY: 'auto',
-            color: '#f2f2f2',
-            border: '1px solid #3c3f41'
+            color: '#f2f2f2'
         }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
                 <h3 style={{ margin: 0, fontSize: '22px', fontWeight: '700', color: '#fff' }}>Прогноз полетов</h3>
-                <button 
+                    <button 
                     onClick={(e) => { e.stopPropagation(); setIsExpanded(false); }}
+                        className="glass-button"
                     style={{ 
-                        background: '#3c3f41', 
-                        border: 'none', 
+                        background: '#3c3f41',
+                        border: 'none',
                         cursor: 'pointer', 
                         fontSize: '20px',
                         width: '40px',
                         height: '40px',
-                        borderRadius: '12px',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -299,11 +291,10 @@ const WeatherCalendar = ({ onTodayWeatherChange }) => {
                         fontWeight: '600',
                         transition: 'all 0.2s'
                     }}>⛈️ Плохая</button>
-                    <button onClick={() => setWeatherMode(false)} style={{
+                    <button onClick={() => setWeatherMode(false)} className="glass-button" style={{
                         flex: 1,
                         padding: '12px', 
                         fontSize: '13px', 
-                        borderRadius: '10px', 
                         border: 'none',
                         background: !override.enabled ? '#5c9ce6' : '#3c3f41',
                         color: !override.enabled ? '#1e1e1e' : '#f2f2f2', 

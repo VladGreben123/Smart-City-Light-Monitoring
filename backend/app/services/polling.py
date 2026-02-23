@@ -9,7 +9,6 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.controller.base import BaseController, LampStatusCode
-from app.core.database import Session
 from app.models import Lamp, LampEvent, LampStatus, Streetlight
 from app.services.websocket import WSManager
 from app.services.daylight import is_dark_now
@@ -136,12 +135,9 @@ async def _poll_once(
 ) -> None:
     with Session(engine) as session:
         # Оптимизация: загружаем Streetlight сразу вместе с Lamp, чтобы избежать N+1
-        # Используем join для эффективности
         results = session.exec(
             select(Streetlight, Lamp).join(Lamp, isouter=True).where(Streetlight.is_active == True)
         ).all()
-
-        updates: list[dict] = []
 
         # Используем контекстный менеджер для клиента, чтобы переиспользовать соединение
         async with httpx.AsyncClient(timeout=5.0, trust_env=False) as http_client:
@@ -150,6 +146,10 @@ async def _poll_once(
                 hour = datetime.now().hour
                 dark = hour >= 20 or hour < 6
 
+            # 1. Сбор данных с контроллеров (последовательно, т.к. Modbus часто требует последовательности)
+            processed_entries = []
+            ai_tasks = []
+            
             for sl, lamp in results:
                 if lamp is None:
                     continue
@@ -164,10 +164,12 @@ async def _poll_once(
                         str(e)
                     )
                     continue
-
+                
+                # Сохраняем старый статус для сравнения
                 old_status = lamp.status
+                
+                # Обновляем поля из контроллера
                 new_status = STATUS_MAP.get(data.status, LampStatus.OK)
-
                 lamp.status = new_status
                 lamp.hours_active = data.hours_active
                 lamp.junction_temp_avg = data.junction_temp_avg
@@ -181,11 +183,10 @@ async def _poll_once(
                 lamp.reflector_position = data.reflector_position
                 lamp.last_seen = datetime.utcnow()
                 lamp.updated_at = datetime.utcnow()
+                
                 if lamp.status in (LampStatus.BURNED_OUT, LampStatus.ABSENT, LampStatus.MAINTENANCE):
-                    # lamp.is_on = False # User requested state depends ONLY on time
                     if lamp.status == LampStatus.BURNED_OUT:
                         lamp.failure_probability = 1.0
-                    pass
 
                 should_be_on = dark
                 if is_in_repair_delay(lamp.id):
@@ -204,31 +205,38 @@ async def _poll_once(
                             sl.name,
                         )
                     except Exception as e:
-                        logger.warning(
-                            "Failed to switch lamp slave_id=%d: %s",
-                            sl.modbus_slave_id,
-                            str(e)
-                        )
+                        logger.warning("Failed to switch lamp slave_id=%d: %s", sl.modbus_slave_id, str(e))
 
-                # Запрос вероятности отказа от AI
-                fp = await _get_failure_probability(http_client, lamp)
+                # Добавляем в список для AI-запроса
+                processed_entries.append((sl, lamp, old_status))
+                ai_tasks.append(_get_failure_probability(http_client, lamp))
+
+            # 2. Параллельный запрос к AI
+            ai_results = await asyncio.gather(*ai_tasks, return_exceptions=True)
+
+            # 3. Применение результатов AI и отправка обновлений
+            for i, (sl, lamp, old_status) in enumerate(processed_entries):
+                fp = ai_results[i]
+                
+                if isinstance(fp, Exception):
+                    logger.warning(f"AI prediction failed for lamp {lamp.id}: {fp}")
+                    fp = None
+                
                 if fp is not None:
                     lamp.failure_probability = fp
                 else:
-                    # Fallback логика:
-                    # Если лампа исправна, но вероятность поломки все еще 1.0 (например, после ремонта или stale data),
-                    # сбрасываем ее в 0.0
+                    # Fallback
                     if lamp.status == LampStatus.OK and lamp.failure_probability >= 0.99:
                         lamp.failure_probability = 0.0
 
                 # Запись события при смене статуса
-                if old_status != new_status:
+                if old_status != lamp.status:
                     event = LampEvent(
                         lamp_id=lamp.id,
                         event_type="status_change",
                         details=json.dumps({
                             "from": old_status.value,
-                            "to": new_status.value,
+                            "to": lamp.status.value,
                         }),
                     )
                     session.add(event)
@@ -236,26 +244,16 @@ async def _poll_once(
                         "Lamp %d status: %s -> %s",
                         lamp.id,
                         old_status.value,
-                        new_status.value,
+                        lamp.status.value,
                     )
-
-                logger.debug(
-                    "Polled slave_id=%d is_on=%s fp=%.2f",
-                    sl.modbus_slave_id,
-                    data.is_on,
-                    lamp.failure_probability,
-                )
-
-                # Send distinct fields for frontend flexibility
-                updates.append({
+                
+                # МГНОВЕННАЯ отправка обновления по WebSocket
+                update_payload = {
                     "id": lamp.id,
-                    "status": lamp.status.value,  # "ok", "burned_out", etc.
-                    "is_on": lamp.is_on,          # true/false
+                    "status": lamp.status.value,
+                    "is_on": lamp.is_on,
                     "state": round(1.0 - lamp.failure_probability, 4),
-                })
+                }
+                await ws_manager.broadcast(update_payload)
 
         session.commit()
-
-    # Отправить каждую лампу отдельным сообщением (формат фронта)
-    for upd in updates:
-        await ws_manager.broadcast(upd)

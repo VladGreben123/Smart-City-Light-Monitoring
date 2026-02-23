@@ -60,6 +60,17 @@ async def update_lamp_status(
     except Exception as e:
         logger.error(f"Controller sync failed: {e}")
 
+    # Broadcast update via WebSocket
+    await ws_manager.broadcast({
+        "id": lamp.id,
+        "status": lamp.status,
+        "is_on": lamp.is_on,
+        "state": 0.0 if lamp.status != LampStatus.OK else 1.0,
+        "lat": lamp.streetlight.latitude if lamp.streetlight else 0.0,
+        "lng": lamp.streetlight.longitude if lamp.streetlight else 0.0,
+        "address": lamp.streetlight.address if lamp.streetlight else ""
+    })
+
     return lamp
 
 @router.get("/lamps")
@@ -70,7 +81,7 @@ async def get_lamps(session: Session = Depends(get_session)):
     lamps_data = []
     for sl, lamp in results:
         lamps_data.append({
-            "id": sl.id,
+            "id": lamp.id if lamp else sl.id,  # Use Lamp ID to match routing service
             "lat": sl.latitude,
             "lng": sl.longitude,
             "address": sl.address,
@@ -90,6 +101,7 @@ class ScenarioAction(BaseModel):
 @router.post("/lamps/scenario")
 async def run_scenario(
     action: ScenarioAction,
+    request: Request,
     session: Session = Depends(get_session)
 ):
     """
@@ -97,16 +109,43 @@ async def run_scenario(
     """
     lamps = session.exec(select(Lamp).where(Lamp.id.in_(action.lamp_ids))).all()
     
+    updates = []
+    
     for lamp in lamps:
+        code = LampStatusCode.OK
         if action.action == "break":
             lamp.status = LampStatus.BURNED_OUT
             lamp.failure_probability = 0.99
+            code = LampStatusCode.BURNED_OUT
         elif action.action == "fix":
             lamp.status = LampStatus.OK
             lamp.failure_probability = 0.05
+            code = LampStatusCode.OK
+            
         session.add(lamp)
+        
+        # Sync with controller
+        try:
+            if hasattr(request.app.state, "controller"):
+                controller = request.app.state.controller
+                if lamp.streetlight:
+                    slave_id = lamp.streetlight.modbus_slave_id
+                    await controller.set_status(slave_id, code)
+        except Exception as e:
+            logger.error(f"Controller sync failed in scenario: {e}")
+            
+        updates.append({
+            "id": lamp.id,
+            "status": lamp.status,
+            "is_on": lamp.is_on,
+            "state": 0.0 if lamp.status != LampStatus.OK else 1.0,
+        })
     
     session.commit()
+    
+    if updates:
+        await ws_manager.broadcast(updates)
+
     return {"status": "ok", "updated": len(lamps)}
 
 
@@ -180,6 +219,8 @@ async def get_weather_forecast():
             date_str = day["date"]
             parts = day.get("parts", {}).get("day_short", {})
             temp = parts.get("temp", 0)
+            # Фронтенд ожидает temp_min, используем temp как fallback
+            temp_min = parts.get("temp_min", temp)
             condition = parts.get("condition", "cloudy")
             wind_speed = parts.get("wind_speed", 0)
             
@@ -194,6 +235,7 @@ async def get_weather_forecast():
             forecast_list.append({
                 "date": date_str,
                 "temp": temp,
+                "temp_min": temp_min,
                 "condition": condition,
                 "wind_speed": wind_speed,
                 "is_bad_weather": is_bad,
@@ -227,6 +269,7 @@ async def get_weather_forecast():
             forecast_list.append({
                 "date": date_str,
                 "temp": 20 - i,
+                "temp_min": 20 - i,
                 "condition": "clear",
                 "wind_speed": 5.0,
                 "is_bad_weather": is_bad,
