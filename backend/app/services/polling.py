@@ -140,7 +140,7 @@ async def _poll_once(
         updates: list[dict] = []
 
         # Используем контекстный менеджер для клиента, чтобы переиспользовать соединение
-        async with httpx.AsyncClient(timeout=5.0) as http_client:
+        async with httpx.AsyncClient(timeout=5.0, trust_env=False) as http_client:
             dark = await is_dark_now(http_client)
             if dark is None:
                 hour = datetime.now().hour

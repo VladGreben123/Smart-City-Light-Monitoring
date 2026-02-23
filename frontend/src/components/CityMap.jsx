@@ -78,12 +78,12 @@ const mapStatusFromApi = (status, isOn) => {
   };
 
 const mapLampFromApi = (item) => {
-  const state = 1 - (item.failure_probability ?? 0);
+  const state = 1 - (item.failure_prob ?? 0);
   return {
-    id: item.lamp_id,
-    lat: item.latitude,
-    lng: item.longitude,
-    status: mapStatusFromApi(item.status, item.is_on),
+    id: item.id,
+    lat: item.lat,
+    lng: item.lng,
+    status: mapStatusFromApi(item.status, false), // Default to off until WS update
     state: Math.max(0, Math.min(1, state)),
     address: item.address
   };
@@ -275,7 +275,7 @@ const CityMap = () => {
       .then(res => res.json())
       .then(data => {
         const mapped = data
-          .filter(item => item.lamp_id)
+          .filter(item => item.id)
           .map(mapLampFromApi)
           .map(l => {
             if (brokenLampIdsRef.current.has(l.id)) l.state = 0.0;
