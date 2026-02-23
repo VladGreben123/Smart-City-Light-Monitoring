@@ -23,8 +23,13 @@ const RoutePanel = ({ brokenCount, minToFly = 3, routeData, droneStatus }) => {
             fontSize: '12px',
             color: '#333',
         }}>
-            <div style={{ fontWeight: '600', fontSize: '13px', marginBottom: '6px' }}>
-                🤖 Маршрут ИИ
+            <div style={{ fontWeight: '600', fontSize: '13px', marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>🤖 {isFlying ? 'Текущий маршрут' : 'Последний маршрут'}</span>
+                {routeData?.timestamp && !isFlying && (
+                    <span style={{ fontSize: '10px', color: '#999', fontWeight: 'normal' }}>
+                        {new Date(routeData.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                )}
             </div>
 
             {/* Статус */}

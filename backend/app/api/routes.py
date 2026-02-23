@@ -1,11 +1,12 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, Request
 from sqlmodel import Session, select
 from pydantic import BaseModel
 
 from app.core.database import get_session
 from app.core.config import settings
 from app.models import Lamp, LampStatus, Streetlight
+from app.controller.base import LampStatusCode
 from app.services.websocket import ws_manager
 from app.services.weather import set_weather_override, get_weather_override
 from app.services.yandex_weather import get_yandex_data, is_yandex_condition_bad
@@ -28,6 +29,7 @@ class LampUpdate(BaseModel):
 async def update_lamp_status(
     lamp_id: int,
     lamp_update: LampUpdate,
+    request: Request,
     session: Session = Depends(get_session)
 ):
     lamp = session.get(Lamp, lamp_id)
@@ -35,9 +37,29 @@ async def update_lamp_status(
         raise HTTPException(status_code=404, detail="Lamp not found")
     
     lamp.status = lamp_update.status
+    if lamp.status == LampStatus.OK:
+        lamp.failure_probability = 0.0
+    
     session.add(lamp)
     session.commit()
     session.refresh(lamp)
+
+    # Sync with controller
+    try:
+        if hasattr(request.app.state, "controller"):
+            controller = request.app.state.controller
+            if lamp.streetlight:
+                slave_id = lamp.streetlight.modbus_slave_id
+                code = LampStatusCode.OK
+                if lamp.status == LampStatus.BURNED_OUT:
+                    code = LampStatusCode.BURNED_OUT
+                elif lamp.status == LampStatus.ABSENT:
+                    code = LampStatusCode.ABSENT
+                
+                await controller.set_status(slave_id, code)
+    except Exception as e:
+        logger.error(f"Controller sync failed: {e}")
+
     return lamp
 
 @router.get("/lamps")
@@ -53,6 +75,7 @@ async def get_lamps(session: Session = Depends(get_session)):
             "lng": sl.longitude,
             "address": sl.address,
             "status": lamp.status if lamp else "unknown",
+            "is_on": lamp.is_on if lamp else False,
             "failure_prob": lamp.failure_probability if lamp else 0.0
         })
     return lamps_data

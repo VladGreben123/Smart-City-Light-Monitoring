@@ -32,17 +32,17 @@ class MockController(BaseController):
     def _get_state(self, slave_id: int) -> _MockLampState:
         if slave_id not in self._states:
             self._states[slave_id] = _MockLampState(
-                hours_active=random.randint(100, 5000),
-                junction_temp_avg=random.uniform(35.0, 55.0),
-                voltage_spike_count=random.randint(0, 20),
-                on_off_cycles=random.randint(50, 500),
-                humidity_avg=random.uniform(30.0, 70.0),
-                ambient_temp=random.uniform(-10.0, 30.0),
+                hours_active=random.randint(0, 100),  # Ideal: low hours
+                junction_temp_avg=random.uniform(40.0, 50.0), # Normal temp
+                voltage_spike_count=0, # Ideal: no spikes
+                on_off_cycles=random.randint(0, 50),
+                humidity_avg=random.uniform(40.0, 60.0),
+                ambient_temp=random.uniform(15.0, 25.0),
             )
         return self._states[slave_id]
 
     def simulate_chaos(self) -> None:
-        """Симуляция случайных поломок: выбирается одна случайная лампа и с вероятностью 3% ломается."""
+        """Симуляция случайных поломок: выбирается одна случайная лампа и с вероятностью 30% ломается."""
         if not self._states:
             return
 
@@ -52,12 +52,13 @@ class MockController(BaseController):
 
         # Если лампа исправна, пробуем сломать
         if state.status == LampStatusCode.OK:
-            # Вероятность 3% (как просил пользователь)
+            # Вероятность 30% (как просил пользователь)
             if random.random() < 0.3:
                 state.status = LampStatusCode.BURNED_OUT
                 logger.info(f"CHAOS: Lamp {slave_id} BURNED_OUT simulated!")
 
     async def read_lamp_data(self, slave_id: int) -> LampData:
+
         state = self._get_state(slave_id)
 
         if state.status == LampStatusCode.BURNED_OUT:
@@ -128,3 +129,8 @@ class MockController(BaseController):
         state.status = status
         if status == LampStatusCode.BURNED_OUT:
             state.is_on = False
+        elif status == LampStatusCode.OK:
+            state.junction_temp_avg = 45.0
+            state.voltage_spike_count = 0
+            state.humidity_avg = 55.0
+            logger.info(f"Lamp {slave_id} repaired (MockController).")

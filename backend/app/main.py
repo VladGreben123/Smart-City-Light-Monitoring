@@ -30,6 +30,7 @@ logger = logging.getLogger("main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Resetting lamps to ideal state on startup (MockController init)
     create_db()
     _seed_demo_data()
 
@@ -111,6 +112,6 @@ def _seed_demo_data() -> None:
         logger.info("Seeded %d demo streetlights", len(positions))
 
 
-# ── REST API ─────────────────────────────────────────────
-
-# ── Demo seed ────────────────────────────────────────────
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

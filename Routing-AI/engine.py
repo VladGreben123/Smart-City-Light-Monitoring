@@ -6,12 +6,12 @@ from typing import List, Tuple, Dict, Optional
 
 @dataclass
 class DroneConfig:
-    base_mass: float = 2.0
-    lamp_mass: float = 2.0
-    energy_rate: float = 15.0
+    base_mass: float = 3.0
+    lamp_mass: float = 0.1  # Significantly reduced to realistic payload (e.g. light bulbs)
+    energy_rate: float = 4.0
     wind_k: float = 0.3
     avg_speed_mps: float = 10.0
-    battery_capacity_wh: float = 100.0
+    battery_capacity_wh: float = 500.0 # Increased for industrial drone
     watts_per_unit: float = 10.0
     avg_power_watts: float = 400.0
 

@@ -119,6 +119,10 @@ async def polling_loop(
 
     while True:
         try:
+            # Симуляция хаоса (если это MockController)
+            if hasattr(controller, "simulate_chaos"):
+                controller.simulate_chaos()
+                
             await _poll_once(controller, engine, ws_manager)
         except Exception:
             logger.exception("Polling cycle error")
@@ -242,13 +246,11 @@ async def _poll_once(
                     lamp.failure_probability,
                 )
 
-                # if lamp.status in (LampStatus.BURNED_OUT, LampStatus.ABSENT, LampStatus.MAINTENANCE):
-                #     ws_status = "broken"
-                # else:
-                ws_status = "on" if lamp.is_on else "off"
+                # Send distinct fields for frontend flexibility
                 updates.append({
                     "id": lamp.id,
-                    "status": ws_status,
+                    "status": lamp.status.value,  # "ok", "burned_out", etc.
+                    "is_on": lamp.is_on,          # true/false
                     "state": round(1.0 - lamp.failure_probability, 4),
                 })
 

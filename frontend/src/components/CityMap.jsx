@@ -14,8 +14,8 @@ const DRONEPORT_LNG = 48.7452;
 
 // --- Helper Functions for Icons ---
 
-const createLampIcon = (status, state) => {
-  const borderColor = getBorderColor(status);
+const createLampIcon = (status, is_on, state) => {
+  const borderColor = getBorderColor(is_on);
   const coreColor = getColor(state);
   return L.divIcon({
     className: 'custom-lamp-icon',
@@ -68,34 +68,23 @@ const createDroneportIcon = () => {
   });
 };
 
-const mapStatusFromApi = (status, isOn) => {
-    // If status comes from WebSocket (already mapped)
-    if (status === 'on' || status === 'off') {
-      return status;
-    }
-    // For any other status (ok, burned_out, etc), rely on isOn (time of day)
-    return isOn ? 'on' : 'off';
-  };
-
 const mapLampFromApi = (item) => {
   const state = 1 - (item.failure_prob ?? 0);
+  const isBroken = item.status === 'burned_out' || item.status === 'absent' || item.status === 'maintenance';
+  
   return {
     id: item.id,
     lat: item.lat,
     lng: item.lng,
-    status: mapStatusFromApi(item.status, false), // Default to off until WS update
-    state: Math.max(0, Math.min(1, state)),
+    status: isBroken ? 'broken' : 'ok', // Internal logic: 'ok' or 'broken' for Label
+    is_on: item.is_on ?? false,         // Explicit ON/OFF for Border
+    state: isBroken ? 0.0 : Math.max(0, Math.min(1, state)), // Force 0 if broken
     address: item.address
   };
 };
 
-const getBorderColor = (status) => {
-  switch (status) {
-    case 'on': return '#2ecc71';
-    case 'off': return '#95a5a6';
-    case 'broken': return '#e74c3c';
-    default: return '#bdc3c7';
-  }
+const getBorderColor = (is_on) => {
+  return is_on ? '#2ecc71' : '#95a5a6'; // Green if ON, Grey if OFF
 };
 
 const getColor = (stat) => {
@@ -105,11 +94,7 @@ const getColor = (stat) => {
 };
 
 const getLabel = (status) => {
-  switch (status) {
-    case 'on': return 'Работает';
-    case 'off': return 'Выключена';
-    default: return 'Неизвестно';
-  }
+  return status === 'broken' ? 'Сломана' : 'Работает';
 };
 
 // Component to fix map rendering issues on resize/mount
@@ -210,33 +195,61 @@ const CityMap = () => {
 
       ws.current.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
-          // console.log('Received update:', data);
+          const parsed = JSON.parse(event.data);
+          // console.log('WS Update:', parsed); // Debug
+          // Handle both single update and array of updates
+          const updates = Array.isArray(parsed) ? parsed : [parsed];
           
-          if (data.id) {
-            setLamps(prevLamps => {
-              const index = prevLamps.findIndex(lamp => lamp.id === data.id);
-              const prev = index >= 0 ? prevLamps[index] : null;
+          setLamps(prevLamps => {
+            let newLamps = [...prevLamps];
+            let hasChanges = false;
+
+            updates.forEach(data => {
+              if (!data.id) return;
+
+              const index = newLamps.findIndex(lamp => lamp.id === data.id);
+              const prev = index >= 0 ? newLamps[index] : null;
+              
+              // New parsing logic based on explicit fields
+              const isBroken = data.status === 'burned_out' || data.status === 'absent' || data.status === 'maintenance' || data.status === 'broken';
+              const newInternalStatus = isBroken ? 'broken' : 'ok';
+              const newIsOn = data.is_on ?? prev?.is_on ?? false;
+
+              // Logic for state (health):
+              // 1. If manually broken (scenario), force 0.0
+              // 2. If recently repaired, force 1.0
+              // 3. If broken from backend, force 0.0
+              // 4. Otherwise use data.state or keep previous
+              let newState = brokenLampIdsRef.current.has(data.id) ? 0.0 :
+                             (recentlyRepairedLampIdsRef.current.has(data.id) ? 1.0 :
+                             (isBroken ? 0.0 : (typeof data.state === 'number' ? data.state : (prev?.state ?? 1))));
+
+              // Ensure we don't overwrite with stale data if backend is lagging behind a repair
+              if (recentlyRepairedLampIdsRef.current.has(data.id)) {
+                   newState = 1.0;
+              }
+
               const nextLamp = {
                 id: data.id,
                 lat: data.lat ?? prev?.lat ?? ORIGIN_LAT,
                 lng: data.lng ?? prev?.lng ?? ORIGIN_LNG,
                 address: data.address ?? prev?.address ?? '',
-                status: data.status ? mapStatusFromApi(data.status, data.is_on ?? (prev?.status === 'on')) : (prev?.status ?? 'off'),
-                state: brokenLampIdsRef.current.has(data.id) ? 0.0 :
-                       (recentlyRepairedLampIdsRef.current.has(data.id) ? 1.0 :
-                       (typeof data.state === 'number' ? data.state : (prev?.state ?? 1)))
+                status: newInternalStatus,
+                is_on: newIsOn,
+                state: newState
               };
 
               if (index === -1) {
-                return [...prevLamps, nextLamp];
+                newLamps.push(nextLamp);
+                hasChanges = true;
+              } else if (JSON.stringify(prev) !== JSON.stringify(nextLamp)) {
+                 newLamps[index] = nextLamp;
+                 hasChanges = true;
               }
-
-              return prevLamps.map(lamp =>
-                lamp.id === data.id ? nextLamp : lamp
-              );
             });
-          }
+
+            return hasChanges ? newLamps : prevLamps;
+          });
         } catch (error) {
           console.error('Error parsing message:', error);
         }
@@ -378,6 +391,14 @@ const CityMap = () => {
           if (brokenLampIdsRef.current.has(lampId)) {
             brokenLampIdsRef.current.delete(lampId);
           }
+            
+          // Sync with backend (ALWAYS repair, whether manual or random)
+          fetch(`http://localhost:8000/api/lamps/${lampId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'ok' })
+          }).catch(e => console.error("Repair sync failed", e));
+
           // Mark as recently repaired to ignore stale backend updates
           recentlyRepairedLampIdsRef.current.add(lampId);
           setTimeout(() => {
@@ -435,7 +456,7 @@ const CityMap = () => {
     };
   }, [droneStatus, dronePath]);
 
-  const MIN_BROKEN_TO_FLY = 3;
+  const MIN_BROKEN_TO_FLY = 1;
 
   const startDroneMission = useCallback(async () => {
     if (droneStatus !== 'idle') return;
@@ -444,22 +465,29 @@ const CityMap = () => {
     const brokenLamps = lampsRef.current.filter(l => l.state <= 0.34);
     if (brokenLamps.length < MIN_BROKEN_TO_FLY) return;
 
-    // Запрашиваем оптимальный маршрут ТОЛЬКО перед вылетом
+    // Запрашиваем оптимальный маршрут для всех случаев (даже 1 лампа) для получения метрик
     let pathIds = brokenLamps.map(l => l.id);
-    try {
-      const resp = await fetch('http://localhost:8000/api/route/optimize', { method: 'POST' });
-      if (resp.ok) {
-        const data = await resp.json();
-        setRouteData(data);
-        if (data.route_ids?.length > 0) {
-          const brokenIdSet = new Set(brokenLamps.map(l => l.id));
-          const ordered = data.route_ids.map(Number).filter(id => brokenIdSet.has(id));
-          const remaining = brokenLamps.map(l => l.id).filter(id => !ordered.includes(id));
-          pathIds = [...ordered, ...remaining];
+    
+    if (brokenLamps.length >= 1) {
+      try {
+        const resp = await fetch('http://localhost:8000/api/route/optimize', { method: 'POST' });
+        if (resp.ok) {
+          const data = await resp.json();
+          // Only update if we got a valid route, preserving last flight stats otherwise
+          if (!data.message) {
+            setRouteData({ ...data, timestamp: Date.now() });
+          }
+          
+          if (data.route_ids?.length > 0) {
+            const brokenIdSet = new Set(brokenLamps.map(l => l.id));
+            const ordered = data.route_ids.map(Number).filter(id => brokenIdSet.has(id));
+            const remaining = brokenLamps.map(l => l.id).filter(id => !ordered.includes(id));
+            pathIds = [...ordered, ...remaining];
+          }
         }
+      } catch (e) {
+        console.error('Route optimization failed, using default order', e);
       }
-    } catch (e) {
-      console.error('Route optimization failed, using default order', e);
     }
 
     setDronePath(pathIds);
@@ -723,7 +751,7 @@ const CityMap = () => {
           <Marker 
             key={lamp.id} 
             position={[lamp.lat, lamp.lng]}
-            icon={createLampIcon(lamp.status, lamp.state)}
+            icon={createLampIcon(lamp.status, lamp.is_on, lamp.state)}
           >
             <Popup>
             <div style={{ minWidth: '150px' }}>
