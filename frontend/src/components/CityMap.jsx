@@ -79,7 +79,16 @@ const mapLampFromApi = (item) => {
     status: isBroken ? 'broken' : 'ok', // Internal logic: 'ok' or 'broken' for Label
     is_on: item.is_on ?? false,         // Explicit ON/OFF for Border
     state: isBroken ? 0.0 : Math.max(0, Math.min(1, state)), // Force 0 if broken
-    address: item.address
+    address: item.address,
+    // Pass raw metrics for popup display
+    voltage: item.voltage,
+    current: item.current,
+    power: item.power,
+    temperature: item.temperature,
+    brightness: item.brightness,
+    operating_hours: item.operating_hours,
+    last_maintenance: item.last_maintenance,
+    failure_prob: item.failure_prob
   };
 };
 
@@ -209,13 +218,22 @@ const CityMap = () => {
               let newState = isBroken ? 0.0 : (typeof data.state === 'number' ? data.state : (prev?.state ?? 1));
 
               const nextLamp = {
+                ...prev, // Keep existing fields
                 id: data.id,
                 lat: data.lat ?? prev?.lat ?? ORIGIN_LAT,
                 lng: data.lng ?? prev?.lng ?? ORIGIN_LNG,
                 address: data.address ?? prev?.address ?? '',
                 status: newInternalStatus,
                 is_on: newIsOn,
-                state: newState
+                state: newState,
+                // Update technical params if present in payload
+                voltage: data.voltage ?? prev?.voltage,
+                current: data.current ?? prev?.current,
+                power: data.power ?? prev?.power,
+                temperature: data.temperature ?? prev?.temperature,
+                brightness: data.brightness ?? prev?.brightness,
+                operating_hours: data.operating_hours ?? prev?.operating_hours,
+                last_maintenance: data.last_maintenance ?? prev?.last_maintenance
               };
 
               if (index === -1) {
@@ -850,18 +868,55 @@ const CityMap = () => {
             position={[lamp.lat, lamp.lng]}
             icon={createLampIcon(lamp.status, lamp.is_on, lamp.state)}
           >
-            <Popup>
-            <div style={{ minWidth: '150px' }}>
-              <h4 style={{ margin: '0 0 5px' }}>Лампа №{lamp.id}</h4>
-              <p style={{ margin: '2px 0', fontSize: '13px', color: '#555' }}>{lamp.address}</p>
-              <p style={{ margin: '2px 0', fontSize: '13px' }}>
-                Состояние: <strong style={{ color: getBorderColor(lamp.status) }}>{getLabel(lamp.status)}</strong>
-              </p>
-              <p style={{ margin: '2px 0', fontSize: '13px' }}>
-                Целостность: <strong style={{ color: getColor(lamp.state) }}>{(lamp.state * 100).toFixed(0)}%</strong>
-              </p>
-            </div>
-          </Popup>
+            <Popup className="glass-popup" minWidth={280} maxWidth={320}>
+              <div style={{ color: '#fff', padding: '5px' }}>
+                <h4 style={{ margin: '0 0 8px', borderBottom: '1px solid rgba(255,255,255,0.2)', paddingBottom: '4px' }}>
+                  Лампа #{lamp.id}
+                </h4>
+                
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px' }}>
+                  <div><strong>Адрес:</strong></div>
+                  <div style={{ gridColumn: 'span 2', marginBottom: '4px' }}>{lamp.address || 'Н/Д'}</div>
+                  
+                  <div><strong>Статус:</strong></div>
+                  <div style={{ 
+                    color: lamp.status === 'broken' ? '#ff6b6b' : '#2ecc71',
+                    fontWeight: 'bold' 
+                  }}>
+                    {lamp.status === 'broken' ? 'Сломана' : 'Работает'}
+                  </div>
+
+                  <div><strong>Состояние:</strong></div>
+                  <div>{Math.round(lamp.state * 100)}%</div>
+
+                  {/* Integrity Metrics */}
+                  <div style={{ gridColumn: 'span 2', marginTop: '8px', fontWeight: 'bold', color: 'rgba(255,255,255,0.7)' }}>Параметры:</div>
+                  
+                  <div>Напряжение:</div>
+                  <div>{lamp.voltage !== undefined && lamp.voltage !== null ? `${lamp.voltage} В` : '-'}</div>
+
+                  <div>Ток:</div>
+                  <div>{lamp.current !== undefined && lamp.current !== null ? `${lamp.current} А` : '-'}</div>
+
+                  <div>Мощность:</div>
+                  <div>{lamp.power !== undefined && lamp.power !== null ? `${lamp.power} Вт` : '-'}</div>
+
+                  <div>Температура:</div>
+                  <div>{lamp.temperature !== undefined && lamp.temperature !== null ? `${lamp.temperature} °C` : '-'}</div>
+
+                  <div>Яркость:</div>
+                  <div>{lamp.brightness !== undefined && lamp.brightness !== null ? `${lamp.brightness}%` : '-'}</div>
+                  
+                  <div>Часы работы:</div>
+                  <div>{lamp.operating_hours !== undefined && lamp.operating_hours !== null ? `${lamp.operating_hours} ч` : '-'}</div>
+
+                  <div>Вероятность отказа:</div>
+                  <div style={{ color: lamp.failure_prob > 0.5 ? '#ff6b6b' : 'inherit' }}>
+                    {lamp.failure_prob ? `${(lamp.failure_prob * 100).toFixed(1)}%` : '0%'}
+                  </div>
+                </div>
+              </div>
+            </Popup>
           </Marker>
         ))}
       </MapContainer>

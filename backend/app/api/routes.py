@@ -87,7 +87,15 @@ async def get_lamps(session: Session = Depends(get_session)):
             "address": sl.address,
             "status": lamp.status if lamp else "unknown",
             "is_on": lamp.is_on if lamp else False,
-            "failure_prob": lamp.failure_probability if lamp else 0.0
+            "failure_prob": lamp.failure_probability if lamp else 0.0,
+            # Technical parameters
+            "voltage": lamp.voltage if lamp else 0.0,
+            "current": (lamp.current_ma / 1000.0) if lamp else 0.0, # Convert mA to A
+            "power": lamp.power_w if lamp else 0.0,
+            "temperature": lamp.junction_temp_avg if lamp else 0.0,
+            "brightness": 100 if (lamp and lamp.is_on) else 0, # Simple logic for now
+            "operating_hours": lamp.hours_active if lamp else 0,
+            "last_maintenance": lamp.updated_at.isoformat() if (lamp and lamp.updated_at) else None
         })
     return lamps_data
 

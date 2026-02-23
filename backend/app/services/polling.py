@@ -253,6 +253,13 @@ async def _poll_once(
                     "status": lamp.status.value,
                     "is_on": lamp.is_on,
                     "state": round(1.0 - lamp.failure_probability, 4),
+                    "voltage": lamp.voltage,
+                    "current": (lamp.current_ma / 1000.0) if lamp.current_ma is not None else 0.0,
+                    "power": lamp.power_w,
+                    "temperature": lamp.junction_temp_avg,
+                    "brightness": 100 if lamp.is_on else 0,
+                    "operating_hours": lamp.hours_active,
+                    "last_maintenance": lamp.updated_at.isoformat() if lamp.updated_at else None
                 }
                 await ws_manager.broadcast(update_payload)
 

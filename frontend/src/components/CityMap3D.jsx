@@ -1,5 +1,5 @@
-import React, { useRef, useEffect } from 'react';
-import Map, { Source, Layer, NavigationControl, Marker } from 'react-map-gl/maplibre';
+import React, { useRef, useEffect, useState } from 'react';
+import Map, { Source, Layer, NavigationControl, Marker, Popup } from 'react-map-gl/maplibre';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import * as THREE from 'three';
@@ -15,6 +15,8 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
     const mapRef = useRef(null);
     const droneModelRef = useRef(null); // Reference to the THREE.Group or Scene of the drone
     const dronePositionRef = useRef(null);
+    const [selectedLamp, setSelectedLamp] = useState(null);
+    const [cursor, setCursor] = useState('auto');
 
     // Update drone position when droneStatus changes
     useEffect(() => {
@@ -395,7 +397,9 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                 coordinates: [l.lng, l.lat]
             },
             properties: {
-                state: l.state
+                ...l, // Pass all lamp properties
+                // ensure numeric values are numbers for style expressions if needed
+                state: l.state 
             }
         }))
     };
@@ -423,6 +427,26 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
             ref={mapRef}
             attributionControl={false}
             onError={(e) => console.error("Map Error:", e)}
+            cursor={cursor}
+            interactiveLayerIds={['lamp-circles']}
+            onClick={(e) => {
+                if (e.features && e.features[0] && e.features[0].layer.id === 'lamp-circles') {
+                    const feature = e.features[0];
+                    setSelectedLamp({
+                        ...feature.properties,
+                        lng: feature.geometry.coordinates[0],
+                        lat: feature.geometry.coordinates[1]
+                    });
+                } else {
+                    setSelectedLamp(null);
+                }
+            }}
+            onMouseEnter={(e) => {
+                if (e.features && e.features[0] && e.features[0].layer.id === 'lamp-circles') {
+                    setCursor('pointer');
+                }
+            }}
+            onMouseLeave={() => setCursor('auto')}
         >
             <NavigationControl position="bottom-left" showCompass={false} />
             
@@ -435,7 +459,7 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                     id="lamp-circles"
                     type="circle"
                     paint={{
-                        'circle-radius': 8, // Match Leaflet 8 meters approx? No, pixels.
+                        'circle-radius': 8,
                         'circle-color': [
                             'case',
                             ['<=', ['get', 'state'], 0.33], '#ff0000',
@@ -448,6 +472,68 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                     }}
                 />
             </Source>
+
+            {/* Lamp Popup */}
+            {selectedLamp && (
+                <Popup
+                    longitude={selectedLamp.lng}
+                    latitude={selectedLamp.lat}
+                    anchor="bottom"
+                    onClose={() => setSelectedLamp(null)}
+                    closeButton={true}
+                    closeOnClick={false}
+                    maxWidth="320px"
+                    className="glass-popup"
+                >
+                    <div style={{ color: '#fff', padding: '5px' }}>
+                        <h4 style={{ margin: '0 0 8px', borderBottom: '1px solid rgba(255,255,255,0.2)', paddingBottom: '4px' }}>
+                            Лампа #{selectedLamp.id}
+                        </h4>
+                        
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px' }}>
+                            <div><strong>Адрес:</strong></div>
+                            <div style={{ gridColumn: 'span 2', marginBottom: '4px' }}>{selectedLamp.address || 'Н/Д'}</div>
+                            
+                            <div><strong>Статус:</strong></div>
+                            <div style={{ 
+                                color: selectedLamp.status === 'broken' ? '#ff6b6b' : '#2ecc71',
+                                fontWeight: 'bold' 
+                            }}>
+                                {selectedLamp.status === 'broken' ? 'Сломана' : 'Работает'}
+                            </div>
+
+                            <div><strong>Состояние:</strong></div>
+                            <div>{Math.round(selectedLamp.state * 100)}%</div>
+
+                            {/* Integrity Metrics */}
+                            <div style={{ gridColumn: 'span 2', marginTop: '8px', fontWeight: 'bold', color: 'rgba(255,255,255,0.7)' }}>Параметры:</div>
+                            
+                            <div>Напряжение:</div>
+                            <div>{selectedLamp.voltage !== undefined && selectedLamp.voltage !== null ? `${selectedLamp.voltage} В` : '-'}</div>
+
+                            <div>Ток:</div>
+                            <div>{selectedLamp.current !== undefined && selectedLamp.current !== null ? `${selectedLamp.current} А` : '-'}</div>
+
+                            <div>Мощность:</div>
+                            <div>{selectedLamp.power !== undefined && selectedLamp.power !== null ? `${selectedLamp.power} Вт` : '-'}</div>
+
+                            <div>Температура:</div>
+                            <div>{selectedLamp.temperature !== undefined && selectedLamp.temperature !== null ? `${selectedLamp.temperature} °C` : '-'}</div>
+
+                            <div>Яркость:</div>
+                            <div>{selectedLamp.brightness !== undefined && selectedLamp.brightness !== null ? `${selectedLamp.brightness}%` : '-'}</div>
+                            
+                            <div>Часы работы:</div>
+                            <div>{selectedLamp.operating_hours !== undefined && selectedLamp.operating_hours !== null ? `${selectedLamp.operating_hours} ч` : '-'}</div>
+
+                             <div>Вероятность отказа:</div>
+                            <div style={{ color: selectedLamp.failure_prob > 0.5 ? '#ff6b6b' : 'inherit' }}>
+                                {selectedLamp.failure_prob ? `${(selectedLamp.failure_prob * 100).toFixed(1)}%` : '0%'}
+                            </div>
+                        </div>
+                    </div>
+                </Popup>
+            )}
 
             {/* Drone Path */}
             <Source id="path" type="geojson" data={pathGeoJSON}>
