@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+.git
+.gitignore
+Dockerfile
+README.md
+venv
+env
+.env
+lamps_30.db

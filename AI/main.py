@@ -13,7 +13,7 @@ app = FastAPI(
     version="2.0.0"
 )
 
-MODEL_PATH = 'AI\models\lamp_failure_model.pkl'
+MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models', 'lamp_failure_model.pkl')
 
 if not os.path.exists(MODEL_PATH):
     raise RuntimeError(f"Файл модели {MODEL_PATH} не найден.")
