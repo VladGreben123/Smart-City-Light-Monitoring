@@ -470,8 +470,6 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                 longitude={DRONEPORT_LNG} 
                 latitude={DRONEPORT_LAT} 
                 anchor="center"
-                pitchAlignment="map"
-                rotationAlignment="map"
             >
                 <div className="droneport-marker">
                     <div className="droneport-base">
@@ -487,8 +485,6 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                     longitude={droneStatus.lng} 
                     latitude={droneStatus.lat} 
                     anchor="center"
-                    pitchAlignment="map"
-                    rotationAlignment="map"
                 >
                      <div className="drone-marker">
                         <div className="drone-arm arm-1"></div>
