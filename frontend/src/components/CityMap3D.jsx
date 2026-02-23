@@ -436,7 +436,6 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                     type="circle"
                     paint={{
                         'circle-radius': 8, // Match Leaflet 8 meters approx? No, pixels.
-                        'circle-pitch-alignment': 'map',
                         'circle-color': [
                             'case',
                             ['<=', ['get', 'state'], 0.33], '#ff0000',
@@ -467,7 +466,13 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
             </Source>
             
             {/* Droneport Marker */}
-            <Marker longitude={DRONEPORT_LNG} latitude={DRONEPORT_LAT} anchor="center">
+            <Marker 
+                longitude={DRONEPORT_LNG} 
+                latitude={DRONEPORT_LAT} 
+                anchor="center"
+                pitchAlignment="map"
+                rotationAlignment="map"
+            >
                 <div className="droneport-marker">
                     <div className="droneport-base">
                         <div className="droneport-pad"></div>
@@ -478,7 +483,13 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
 
             {/* Drone Positioning Shadow/Marker */}
             {droneStatus && (
-                <Marker longitude={droneStatus.lng} latitude={droneStatus.lat} anchor="center">
+                <Marker 
+                    longitude={droneStatus.lng} 
+                    latitude={droneStatus.lat} 
+                    anchor="center"
+                    pitchAlignment="map"
+                    rotationAlignment="map"
+                >
                      <div className="drone-marker">
                         <div className="drone-arm arm-1"></div>
                         <div className="drone-arm arm-2"></div>

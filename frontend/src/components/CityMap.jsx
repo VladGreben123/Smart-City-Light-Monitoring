@@ -319,8 +319,8 @@ const CityMap = () => {
     // Reset wait timer on new target/status
     waitUntilRef.current = null;
 
-    const maxSpeed = 0.00001; // Slower speed for better precision
-    const acceleration = 0.0000005;
+    const maxSpeed = 0.000005; // Slower speed for better precision (Halved)
+    const acceleration = 0.00000025; // (Halved)
     const decelerationDist = 0.0005;
     let lastTime = performance.now();
 
