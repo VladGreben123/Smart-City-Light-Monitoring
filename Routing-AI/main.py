@@ -32,9 +32,12 @@ async def optimize_endpoint(req: OptimizeRequest):
         x, y = geo_to_meters(lamp.lat, lamp.lng, req.depot_lat, req.depot_lng)
         lamps_xy.append({'id': lamp.id, 'pos_xy': (x, y)})
 
-    # 4. Быстрая оптимизация (Nearest Neighbor)
-    best_route, best_energy = optimizer.solve_nearest_neighbor(lamps_xy)
-    naive_route, naive_energy = best_route, best_energy
+    # 4. Быстрая оптимизация (Baseline: Nearest Neighbor)
+    naive_route, naive_energy = optimizer.solve_nearest_neighbor(lamps_xy)
+    
+    # 5. Глубокая оптимизация (Genetic Algorithm)
+    # Использует результат naive_route в стартовой популяции для улучшения
+    best_route, best_energy = optimizer.solve(lamps_xy, pop_size=50, generations=100)
 
     # 6. Геометрия
     geometry = [[req.depot_lat, req.depot_lng]]
@@ -62,7 +65,7 @@ async def optimize_endpoint(req: OptimizeRequest):
         battery_usage_percent=round(battery_usage, 1),
         wind_speed=round(wind_speed, 1),
         wind_deg=round(wind_deg, 1),
-        baseline_algorithm="Nearest Neighbor (Distance)"
+        baseline_algorithm="Nearest Neighbor (Distance) + Genetic Refinement"
     )
 
 if __name__ == "__main__":

@@ -102,15 +102,21 @@ class GeneticOptimizer:
         energy = self._calculate_route_energy(route)
         return route, energy
 
-    def solve(self, lamps_xy_list: List[Dict], pop_size: int = 50, generations: int = 80) -> Tuple[List[Dict], float]:
+    def solve(self, lamps_xy_list: List[Dict], pop_size: int = 50, generations: int = 100) -> Tuple[List[Dict], float]:
         if not lamps_xy_list: return [], 0.0
         if len(lamps_xy_list) == 1: 
             return lamps_xy_list, self._calculate_route_energy(lamps_xy_list)
 
-        # Ensure population size is not larger than factorial of len(lamps) for very small sets
-        # But for simplicity, we just sample.
+        # 1. Initialize Population
+        population = []
         
-        population = [random.sample(lamps_xy_list, len(lamps_xy_list)) for _ in range(pop_size)]
+        # Inject Nearest Neighbor solution (helps convergence significantly)
+        nn_route, _ = self.solve_nearest_neighbor(lamps_xy_list)
+        population.append(nn_route)
+        
+        # Fill the rest with random permutations
+        for _ in range(pop_size - 1):
+            population.append(random.sample(lamps_xy_list, len(lamps_xy_list)))
         
         best_route = population[0]
         best_score = float('inf')
@@ -124,18 +130,13 @@ class GeneticOptimizer:
                 best_route = scored[0][0]
 
             # Elitism: keep top 20%
-            elite_count = int(pop_size * 0.2)
-            survivors = [ind for ind, s in scored[:elite_count]]
-            
-            new_pop = survivors[:]
+            elite_count = max(2, int(pop_size * 0.2))
+            new_pop = [ind for ind, s in scored[:elite_count]]
             
             while len(new_pop) < pop_size:
-                # Tournament selection could be better, but random from elite is okay for now
-                if len(survivors) >= 2:
-                    p1, p2 = random.sample(survivors, 2)
-                else:
-                    p1 = survivors[0]
-                    p2 = random.sample(population, 1)[0] # Fallback
+                # Tournament Selection
+                p1 = self._tournament_selection(scored, k=5)
+                p2 = self._tournament_selection(scored, k=5)
                 
                 child = self._crossover(p1, p2)
                 self._mutate(child)
@@ -144,6 +145,11 @@ class GeneticOptimizer:
             population = new_pop
 
         return best_route, best_score
+
+    def _tournament_selection(self, scored_population: List[Tuple[List[Dict], float]], k: int) -> List[Dict]:
+        """Select the best individual from k random individuals"""
+        competitors = random.sample(scored_population, k)
+        return min(competitors, key=lambda x: x[1])[0]
 
     def _crossover(self, p1: List[Dict], p2: List[Dict]) -> List[Dict]:
         """Order Crossover (OX1) logic"""
@@ -167,7 +173,14 @@ class GeneticOptimizer:
         return child
 
     def _mutate(self, individual: List[Dict]) -> None:
-        """Swap mutation"""
+        """Apply mutation: Swap or Inversion"""
         if random.random() < 0.2:
-            i1, i2 = random.sample(range(len(individual)), 2)
-            individual[i1], individual[i2] = individual[i2], individual[i1]
+            method = random.random()
+            if method < 0.5:
+                # Swap Mutation
+                i1, i2 = random.sample(range(len(individual)), 2)
+                individual[i1], individual[i2] = individual[i2], individual[i1]
+            else:
+                # Inversion Mutation (2-opt like)
+                i1, i2 = sorted(random.sample(range(len(individual)), 2))
+                individual[i1:i2+1] = reversed(individual[i1:i2+1])

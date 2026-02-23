@@ -1,4 +1,3 @@
-import httpx
 import random
 import time
 import os
@@ -26,6 +25,4 @@ class WeatherService:
 # but preferably instantiated in main.py
 default_weather_service = WeatherService()
 
-async def get_wind_data(lat: float, lon: float) -> Tuple[float, float]:
-    """Legacy wrapper for backward compatibility if needed."""
-    return await default_weather_service.get_wind_data(lat, lon)
+
