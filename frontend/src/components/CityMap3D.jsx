@@ -248,6 +248,10 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
         // Inject styles to filter only the map canvas, not the markers/controls
         const style = document.createElement('style');
         style.innerHTML = `
+            // .maplibregl-canvas {
+            //     filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+            // }
+
             /* Ensure attribution is readable */
             .maplibregl-ctrl-attrib {
                 background: rgba(0,0,0,0.5) !important;
@@ -408,6 +412,11 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                 pitch: 60, // 3D tilt
                 bearing: -20 // Slight rotation
             }}
+            minZoom={15}
+            maxBounds={[
+                [ORIGIN_LNG - 0.025, ORIGIN_LAT - 0.015],
+                [ORIGIN_LNG + 0.025, ORIGIN_LAT + 0.015]
+            ]}
             style={{width: '100%', height: '100vh'}}
             mapStyle="https://tiles.openfreemap.org/styles/liberty"
             mapLib={maplibregl}
@@ -427,6 +436,7 @@ const CityMap3D = ({ lamps, droneStatus, path }) => {
                     type="circle"
                     paint={{
                         'circle-radius': 8, // Match Leaflet 8 meters approx? No, pixels.
+                        'circle-pitch-alignment': 'map',
                         'circle-color': [
                             'case',
                             ['<=', ['get', 'state'], 0.33], '#ff0000',

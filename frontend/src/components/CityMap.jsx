@@ -684,16 +684,22 @@ const CityMap = () => {
         <button
           className="glass-button"
           style={{
-            padding: '8px 12px',
-            fontSize: '12px',
+            padding: '12px 16px',
+            fontSize: '13px',
             fontWeight: '600',
             cursor: 'pointer',
             border: 'none',
             display: 'flex',
             alignItems: 'center',
-            gap: '6px',
-            color: '#f2f2f2'
+            gap: '8px',
+            color: '#f2f2f2',
+            background: '#2b2d30', /* Solid dark background matching site theme */
+            borderRadius: '8px',    /* Match WeatherCalendar radius */
+            boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
+            transition: 'all 0.2s ease'
           }}
+          onMouseEnter={(e) => e.currentTarget.style.background = '#3c3f41'}
+          onMouseLeave={(e) => e.currentTarget.style.background = '#2b2d30'}
           onClick={() => setShowScenarios(v => !v)}
         >
           <span>⚙</span>
@@ -704,14 +710,20 @@ const CityMap = () => {
           <div
             className="glass-panel"
             style={{
-              padding: '8px 10px',
+              padding: '12px',
               display: 'flex',
               flexDirection: 'column',
-              gap: '5px',
-              minWidth: '150px'
+              gap: '8px',
+              minWidth: '180px',
+              background: 'linear-gradient(135deg, rgba(43, 45, 48, 0.3), rgba(43, 45, 48, 0.1))',
+              borderRadius: '16px',
+              border: '1px solid rgba(255, 255, 255, 0.18)',
+              boxShadow: '0 18px 45px rgba(0, 0, 0, 0.65)',
+              backdropFilter: 'blur(18px) saturate(140%)',
+              webkitBackdropFilter: 'blur(18px) saturate(140%)',
             }}
           >
-            <div style={{ fontSize: '11px', fontWeight: '600', color: '#8f9298', marginBottom: '2px' }}>
+            <div style={{ fontSize: '12px', fontWeight: '600', color: '#8f9298', marginBottom: '4px', paddingLeft: '4px' }}>
               Сценарии миссий
             </div>
             {SCENARIOS.map(s => (
