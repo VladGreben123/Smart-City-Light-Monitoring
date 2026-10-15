@@ -1,7 +1,5 @@
 # 🏙️ Smart City Light Monitoring & Drone Maintenance System
 
-**Проект разработан в рамках хакатона IT-Tupolev 2026.**
-
 Комплексная система мониторинга городского освещения с использованием цифрового двойника города, AI-прогнозирования поломок и автономных дронов для обслуживания инфраструктуры.
 
 ![Dashboard Preview](https://via.placeholder.com/800x400?text=Smart+City+Dashboard+Preview)
